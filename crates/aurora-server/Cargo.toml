@@ -1,0 +1,23 @@
+[package]
+name = "aurora-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aurora-common = { path = "../aurora-common" }
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["ws"] }
+reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures-util = "0.3"
+glob = "0.3"
+regex = "1"
+dirs = "6"
+scraper = "0.22"
+ego-tree = "0.10"
+html2md = "0.2"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+grep-matcher = "0.1"
+tower-http = { version = "0.6", features = ["cors"] }
