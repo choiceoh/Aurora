@@ -26,10 +26,12 @@ jobs:
       - name: Build release
         run: cargo build --release
 
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+
       - name: Create installer
-        run: |
-          choco install innosetup -y
-          iscc installer/windows/setup.iss
+        run: iscc installer/windows/setup.iss
+        shell: cmd
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -104,9 +106,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            aurora-windows/AuroraSetup.exe
-            aurora-windows/aurora.exe
-            aurora-linux/*.deb
-            aurora-linux/aurora
-            aurora-macos/aurora
+            aurora-windows/installer/windows/Output/AuroraSetup.exe
+            aurora-windows/target/release/aurora.exe
+            aurora-linux/target/debian/*.deb
+            aurora-linux/target/release/aurora
+            aurora-macos/target/release/aurora
           generate_release_notes: true
