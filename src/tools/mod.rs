@@ -1,6 +1,7 @@
 pub mod bash;
 pub mod file;
-pub mod search;
+pub mod ripgrep_native;
+pub mod web_fetch;
 
 use crate::types::Tool;
 use serde_json::Value;
@@ -21,7 +22,8 @@ impl Registry {
         };
         file::register(&mut reg);
         bash::register(&mut reg);
-        search::register(&mut reg);
+        ripgrep_native::register(&mut reg);
+        web_fetch::register(&mut reg);
         reg
     }
 
