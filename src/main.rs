@@ -2,6 +2,7 @@ mod agent;
 mod client;
 mod config;
 mod deneb;
+mod preprocessing;
 mod tools;
 mod types;
 

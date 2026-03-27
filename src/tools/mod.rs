@@ -1,7 +1,8 @@
 pub mod bash;
 pub mod deneb;
 pub mod file;
-pub mod search;
+pub mod ripgrep_native;
+pub mod web_fetch;
 
 use crate::deneb::DenebClient;
 use crate::types::Tool;
@@ -24,7 +25,8 @@ impl Registry {
         };
         file::register(&mut reg);
         bash::register(&mut reg);
-        search::register(&mut reg);
+        ripgrep_native::register(&mut reg);
+        web_fetch::register(&mut reg);
         if let Some(client) = deneb_client {
             deneb::register(&mut reg, client);
         }
