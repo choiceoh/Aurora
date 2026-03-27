@@ -15,6 +15,7 @@ Available tools:
 - bash: Execute shell commands (command, optional timeout in seconds)
 - grep: Search file contents with regex (pattern, optional path/include filter)
 - glob: Find files by glob pattern (pattern, optional base path)
+- web_fetch: Fetch a web page and return cleaned content with metadata (url, optional include_metadata/raw)
 
 Guidelines:
 1. Read files before modifying them to understand context

@@ -1,6 +1,7 @@
 pub mod bash;
 pub mod file;
 pub mod search;
+pub mod web_fetch;
 
 use crate::types::Tool;
 use serde_json::Value;
@@ -22,6 +23,7 @@ impl Registry {
         file::register(&mut reg);
         bash::register(&mut reg);
         search::register(&mut reg);
+        web_fetch::register(&mut reg);
         reg
     }
 
