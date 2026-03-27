@@ -1,0 +1,95 @@
+Fix: Deneb gateway facts parsing failure (importance.go)
+=========================================================
+
+Target: choiceoh/Deneb — gateway-go/internal/memory/importance.go
+
+Root Cause
+----------
+importanceMaxTokens = 512 is too low for Korean content with Qwen3.5 thinking tags.
+
+When the LLM response exceeds 512 tokens, the JSON output gets truncated mid-stream,
+producing invalid JSON like:
+
+  {"facts": [{"content": "사용자가...", "category": "context", "importance": 0.6,
+  "expiry_hint": null}, {"content": "터미널 로그 확
+
+All 5 parsing cases in parseFactsResponse fail on truncated JSON, causing the
+"could not parse facts from response" debug log.
+
+Token budget breakdown (worst case):
+  - <think>...</think> tags from Qwen3.5: ~100-200 tokens
+  - JSON structure overhead: ~50 tokens
+  - 7 Korean facts × ~40-60 tokens each: ~280-420 tokens
+  - Total: ~430-670 tokens → exceeds 512
+
+Fix (2 changes)
+---------------
+
+1. Increase importanceMaxTokens: 512 → 1536
+
+   const (
+       importanceTimeout   = 30 * time.Second
+   -   importanceMaxTokens = 512
+   +   importanceMaxTokens = 1536
+   )
+
+2. Add truncated JSON recovery as Case 6 fallback in parseFactsResponse.
+   Even with more tokens, edge cases can still truncate. This recovers
+   whatever complete facts exist in a truncated response.
+
+   Add at the end of parseFactsResponse, before "return nil, false":
+
+   // Case 6: truncated JSON recovery — close unclosed brackets and retry.
+   if recovered, ok := tryRecoverTruncatedJSON(text); ok {
+       return recovered, true
+   }
+
+   New helper function:
+
+   // tryRecoverTruncatedJSON attempts to recover facts from truncated JSON.
+   // When max_tokens cuts the response mid-JSON, extract whatever complete
+   // fact objects exist by finding the last complete "}" boundary.
+   func tryRecoverTruncatedJSON(text string) ([]ExtractedFact, bool) {
+       idx := strings.Index(text, "[")
+       if idx == -1 {
+           return nil, false
+       }
+
+       sub := text[idx:]
+       lastComplete := strings.LastIndex(sub, "},")
+       if lastComplete == -1 {
+           lastComplete = strings.LastIndex(sub, "}")
+           if lastComplete == -1 {
+               return nil, false
+           }
+           sub = sub[:lastComplete+1] + "]"
+       } else {
+           sub = sub[:lastComplete+1] + "]"
+       }
+
+       var facts []ExtractedFact
+       if err := json.Unmarshal([]byte(sub), &facts); err != nil {
+           return nil, false
+       }
+       if len(facts) == 0 {
+           return nil, false
+       }
+
+       var valid []ExtractedFact
+       for _, f := range facts {
+           if f.Content != "" {
+               valid = append(valid, f)
+           }
+       }
+       if len(valid) == 0 {
+           return nil, false
+       }
+       return valid, true
+   }
+
+Optional improvement: add session/runId to the debug log for easier tracing:
+
+   logger.Debug("importance: could not parse facts from response",
+       "session", sessionKey,   // add
+       "runId", runID,          // add
+       "raw", truncate(text, 200))
