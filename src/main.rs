@@ -2,6 +2,7 @@ mod agent;
 mod client;
 mod config;
 mod deneb;
+mod dreaming;
 mod preprocessing;
 mod tools;
 mod types;
@@ -42,7 +43,7 @@ async fn main() {
 
         let api_client = ApiClient::from_config(&config);
         let registry = Registry::new(deneb_client.clone());
-        *agent.blocking_lock() = Some(Agent::new(api_client, registry, deneb_connected));
+        *agent.blocking_lock() = Some(Agent::new(api_client, registry, deneb_connected, deneb_client.clone()));
 
         if let Some(dc) = deneb_client {
             let app_weak = app.as_weak();
@@ -90,7 +91,7 @@ async fn main() {
 
                 let api_client = ApiClient::from_config(&config);
                 let registry = Registry::new(deneb_client.clone());
-                let new_agent = Agent::new(api_client, registry, deneb_connected);
+                let new_agent = Agent::new(api_client, registry, deneb_connected, deneb_client.clone());
                 *agent_for_setup.blocking_lock() = Some(new_agent);
 
                 if let Some(app) = app_weak.upgrade() {
@@ -257,6 +258,22 @@ async fn main() {
                                     }
                                 });
                             }
+                            AgentEvent::DreamStart => {
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    if let Some(app) = app_weak.upgrade() {
+                                        app.set_is_dreaming(true);
+                                        app.set_status_text(SharedString::from("💤 Dreaming..."));
+                                    }
+                                });
+                            }
+                            AgentEvent::DreamEnd { result } => {
+                                let _ = slint::invoke_from_event_loop(move || {
+                                    if let Some(app) = app_weak.upgrade() {
+                                        app.set_is_dreaming(false);
+                                        let _ = result; // 결과 로깅용
+                                    }
+                                });
+                            }
                         }
                     })
                     .await
@@ -272,6 +289,42 @@ async fn main() {
                         app.set_status_text(SharedString::from("오류 발생"));
                     }
                 });
+            }
+
+            // ─── Dreaming 체크 ───
+            // agent.run() 완료 후, dreaming 조건 충족 시 백그라운드로 실행
+            {
+                let mut guard = agent.lock().await;
+                if let Some(agent) = guard.as_mut() {
+                    if agent.should_dream() {
+                        let aw = app_weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(app) = aw.upgrade() {
+                                app.set_status_text(SharedString::from("💤 Dreaming..."));
+                                app.set_is_dreaming(true);
+                            }
+                        });
+
+                        let dream_result = agent.dream().await;
+
+                        let aw = app_weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(app) = aw.upgrade() {
+                                app.set_is_dreaming(false);
+                                match dream_result {
+                                    Ok(_) => {
+                                        app.set_status_text(SharedString::from("준비됨 (메모리 정리 완료)"));
+                                    }
+                                    Err(e) => {
+                                        app.set_status_text(SharedString::from(
+                                            &format!("준비됨 (dreaming 실패: {e})")
+                                        ));
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
             }
         });
     });

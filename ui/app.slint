@@ -53,6 +53,7 @@ export component App inherits Window {
     in-out property <string> usage-text: "";
     in-out property <int> msg-count: 0;
     in-out property <bool> needs-api-key: false;
+    in-out property <bool> is-dreaming: false;
 
     // ═══ API Key Setup Screen ═══
     if needs-api-key : Rectangle {
@@ -186,13 +187,13 @@ export component App inherits Window {
                         width: 8px;
                         height: 8px;
                         border-radius: 4px;
-                        background: is-streaming ? #e0af68 : #9ece6a;
+                        background: is-dreaming ? #bb9af7 : is-streaming ? #e0af68 : #9ece6a;
                         y: 4px;
                     }
 
                     Text {
                         text: status-text;
-                        color: is-streaming ? #e0af68 : #9ece6a;
+                        color: is-dreaming ? #bb9af7 : is-streaming ? #e0af68 : #9ece6a;
                         font-size: 12px;
                         vertical-alignment: center;
                     }

@@ -1,6 +1,9 @@
 use crate::client::{ApiClient, StreamEvent};
+use crate::deneb::DenebClient;
+use crate::dreaming::{self, DreamTracker};
 use crate::tools::Registry;
 use crate::types::*;
+use std::sync::Arc;
 
 const MAX_ITERATIONS: usize = 25;
 const MAX_CONTEXT_MESSAGES: usize = 100;
@@ -44,10 +47,17 @@ pub struct Agent {
     total_prompt_tokens: i32,
     total_completion_tokens: i32,
     deneb_connected: bool,
+    deneb_client: Option<Arc<DenebClient>>,
+    dream_tracker: DreamTracker,
 }
 
 impl Agent {
-    pub fn new(client: ApiClient, registry: Registry, deneb_connected: bool) -> Self {
+    pub fn new(
+        client: ApiClient,
+        registry: Registry,
+        deneb_connected: bool,
+        deneb_client: Option<Arc<DenebClient>>,
+    ) -> Self {
         let system_prompt = build_system_prompt(deneb_connected);
         Self {
             client,
@@ -56,6 +66,8 @@ impl Agent {
             total_prompt_tokens: 0,
             total_completion_tokens: 0,
             deneb_connected,
+            deneb_client,
+            dream_tracker: DreamTracker::new(),
         }
     }
 
@@ -64,10 +76,43 @@ impl Agent {
         self.messages = vec![make_sys_msg(&system_prompt)];
         self.total_prompt_tokens = 0;
         self.total_completion_tokens = 0;
+        // dreaming 카운터는 유지 (clear해도 메모리 통합은 계속)
     }
 
     pub fn message_count(&self) -> usize {
         self.messages.len().saturating_sub(1)
+    }
+
+    /// Dreaming이 필요한지 확인
+    pub fn should_dream(&self) -> bool {
+        self.deneb_connected && self.dream_tracker.should_dream()
+    }
+
+    /// Dreaming 실행 — Deneb에 대화 요약 전송
+    pub async fn dream(&mut self) -> Result<String, String> {
+        let deneb = self
+            .deneb_client
+            .as_ref()
+            .ok_or("Deneb이 연결되지 않았습니다")?;
+
+        self.dream_tracker.start_dreaming();
+
+        let result = dreaming::dream(deneb, &self.messages).await;
+
+        match &result {
+            Ok(_) => self.dream_tracker.finish_dreaming(),
+            Err(_) => self.dream_tracker.fail_dreaming(),
+        }
+
+        result
+    }
+
+    pub fn is_dreaming(&self) -> bool {
+        self.dream_tracker.is_dreaming()
+    }
+
+    pub fn dream_count(&self) -> usize {
+        self.dream_tracker.dream_count()
     }
 
     /// Exports conversation (excluding system prompt) as JSON.
@@ -92,6 +137,9 @@ impl Agent {
         user_message: String,
         mut on_event: impl FnMut(AgentEvent),
     ) -> Result<(), String> {
+        // Dreaming 데이터 추적: 사용자 메시지
+        self.dream_tracker.track_message(user_message.len());
+
         self.messages.push(Message {
             role: "user".to_string(),
             content: Some(user_message),
@@ -131,6 +179,11 @@ impl Agent {
                     }
                 })
                 .await?;
+
+            // Dreaming 데이터 추적: 어시스턴트 응답
+            if let Some(content) = &assistant_msg.content {
+                self.dream_tracker.track_message(content.len());
+            }
 
             self.messages.push(assistant_msg.clone());
 
@@ -173,6 +226,9 @@ impl Agent {
                     name: tc.function.name.clone(),
                     result: result.clone(),
                 });
+
+                // Dreaming 데이터 추적: 툴 결과
+                self.dream_tracker.track_tool_result(truncated.len());
 
                 self.messages.push(Message {
                     role: "tool".to_string(),

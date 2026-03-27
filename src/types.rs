@@ -94,4 +94,6 @@ pub enum AgentEvent {
     Usage { prompt: i32, completion: i32, total: i32 },
     Done,
     Error(String),
+    DreamStart,
+    DreamEnd { result: String },
 }
