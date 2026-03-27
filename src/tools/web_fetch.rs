@@ -1,17 +1,16 @@
 use super::Registry;
-use crate::preprocessing;
+use crate::preprocessing::{self, WebContentConfig};
 use serde_json::{json, Value};
 
 const MAX_HTML_SIZE: usize = 5 * 1024 * 1024; // 5MB
-const MAX_OUTPUT_CHARS: usize = 50_000;
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
 pub fn register(reg: &mut Registry) {
     reg.register_tool(
         "web_fetch",
-        "Fetch a web page and return its cleaned content with metadata. Strips noise (nav, ads, \
-         cookie banners, etc.), extracts metadata (title, OG tags, JSON-LD), and detects quality \
-         issues (paywall, login wall, bot protection).",
+        "Fetch a web page and return its cleaned Markdown content with metadata. \
+         Single-pass pipeline: noise strip → Markdown conversion → section-based truncation. \
+         Extracts metadata (title, OG tags, JSON-LD) and detects quality issues.",
         json!({
             "type": "object",
             "properties": {
@@ -23,9 +22,13 @@ pub fn register(reg: &mut Registry) {
                     "type": "boolean",
                     "description": "Include metadata header in output (default: true)"
                 },
+                "max_chars": {
+                    "type": "integer",
+                    "description": "Maximum output characters (default: 50000)"
+                },
                 "raw": {
                     "type": "boolean",
-                    "description": "Return raw preprocessed JSON instead of formatted text (default: false)"
+                    "description": "Return raw JSON with metadata/signals/content (default: false)"
                 }
             },
             "required": ["url"]
@@ -37,45 +40,36 @@ pub fn register(reg: &mut Registry) {
 fn web_fetch(args: Value) -> Result<String, String> {
     let url = args["url"].as_str().ok_or("url is required")?;
     let include_metadata = args["include_metadata"].as_bool().unwrap_or(true);
+    let max_chars = args["max_chars"].as_u64().unwrap_or(50_000) as usize;
     let raw = args["raw"].as_bool().unwrap_or(false);
 
-    // Validate URL
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err("URL must start with http:// or https://".to_string());
     }
 
-    // Fetch HTML synchronously using blocking reqwest
+    // Fetch HTML
     let html = fetch_url(url)?;
 
-    // Run preprocessing pipeline
-    let result = preprocessing::preprocess_html(&html);
-
     if raw {
+        // Raw mode: return preprocessing result as JSON (no markdown conversion)
+        let result = preprocessing::preprocess_html(&html);
         return serde_json::to_string_pretty(&result)
             .map_err(|e| format!("Serialization error: {e}"));
     }
 
-    // Format output
-    let mut output = if include_metadata {
-        preprocessing::html_preprocess::format_result(&result)
-    } else {
-        result.cleaned.clone()
+    // Unified pipeline: preprocess → markdown → truncate → format (single call)
+    let config = WebContentConfig {
+        max_chars,
+        include_metadata,
+        include_warnings: true,
+        to_markdown: true,
     };
 
-    // Truncate if too long
-    if output.len() > MAX_OUTPUT_CHARS {
-        let truncated: String = output.chars().take(MAX_OUTPUT_CHARS).collect();
-        output = format!(
-            "{truncated}\n\n[Truncated: showing {MAX_OUTPUT_CHARS}/{} chars]",
-            output.len()
-        );
-    }
-
-    Ok(output)
+    let result = preprocessing::process_web_content(&html, &config);
+    Ok(result.content)
 }
 
 fn fetch_url(url: &str) -> Result<String, String> {
-    // Use a blocking HTTP client since tools run synchronously
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(DEFAULT_TIMEOUT_SECS))
         .redirect(reqwest::redirect::Policy::limited(5))
