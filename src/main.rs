@@ -1,10 +1,12 @@
 mod agent;
 mod client;
+mod config;
 mod tools;
 mod types;
 
 use agent::Agent;
 use client::ApiClient;
+use config::Config;
 use slint::{Model, ModelRc, SharedString, VecModel};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -15,27 +17,61 @@ slint::include_modules!();
 
 #[tokio::main]
 async fn main() {
-    let api_key = std::env::var("ZHIPUAI_API_KEY").unwrap_or_else(|_| {
-        eprintln!("Error: ZHIPUAI_API_KEY environment variable is not set.");
-        eprintln!("Set it with: export ZHIPUAI_API_KEY=your_api_key");
-        std::process::exit(1);
-    });
-
-    let model = std::env::var("AURORA_MODEL").unwrap_or_else(|_| "glm-5-turbo".to_string());
-    let base_url = std::env::var("AURORA_BASE_URL").ok();
-
-    let api_client = ApiClient::new(api_key, model.clone(), base_url);
-    let registry = Registry::new();
-    let agent = Arc::new(Mutex::new(Agent::new(api_client, registry)));
-
     let app = App::new().unwrap();
-    app.set_model_name(SharedString::from(&model));
 
     let current_dir = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
     app.set_current_dir(SharedString::from(&current_dir));
-    app.set_status_text(SharedString::from("준비됨"));
+
+    // 설정 로드 시도
+    let agent: Arc<Mutex<Option<Agent>>> = Arc::new(Mutex::new(None));
+
+    if let Some(config) = Config::load() {
+        // 설정 있음 → 바로 시작
+        app.set_needs_api_key(false);
+        app.set_model_name(SharedString::from(&config.model));
+        app.set_service_name(SharedString::from(config.display_url()));
+        app.set_status_text(SharedString::from("준비됨"));
+
+        let api_client = ApiClient::from_config(&config);
+        let registry = Registry::new();
+        *agent.blocking_lock() = Some(Agent::new(api_client, registry));
+    } else {
+        // 설정 없음 → API 키 입력 화면
+        app.set_needs_api_key(true);
+    }
+
+    // ─── API 키 제출 ───
+    let app_weak = app.as_weak();
+    let agent_for_setup = agent.clone();
+    app.on_submit_api_key(move |key| {
+        let key = key.to_string().trim().to_string();
+        if key.is_empty() {
+            return;
+        }
+
+        match Config::init_with_key(key) {
+            Ok(config) => {
+                let api_client = ApiClient::from_config(&config);
+                let registry = Registry::new();
+                let new_agent = Agent::new(api_client, registry);
+                *agent_for_setup.blocking_lock() = Some(new_agent);
+
+                if let Some(app) = app_weak.upgrade() {
+                    app.set_model_name(SharedString::from(&config.model));
+                    app.set_service_name(SharedString::from(config.display_url()));
+                    app.set_needs_api_key(false);
+                    app.set_status_text(SharedString::from("준비됨"));
+                }
+            }
+            Err(e) => {
+                if let Some(app) = app_weak.upgrade() {
+                    app.set_status_text(SharedString::from(&format!("저장 실패: {e}")));
+                }
+            }
+        }
+    });
 
     // ─── Send message ───
     let app_weak = app.as_weak();
@@ -68,7 +104,17 @@ async fn main() {
             let mut streaming_buf = String::new();
 
             let result = {
-                let mut agent = agent.lock().await;
+                let mut guard = agent.lock().await;
+                let Some(agent) = guard.as_mut() else {
+                    let aw = app_weak.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(app) = aw.upgrade() {
+                            app.set_is_streaming(false);
+                            app.set_status_text(SharedString::from("API 키를 먼저 설정하세요"));
+                        }
+                    });
+                    return;
+                };
                 agent
                     .run(text, |evt| {
                         let app_weak = app_weak.clone();
@@ -199,7 +245,9 @@ async fn main() {
         let app_weak = app_weak.clone();
 
         tokio::spawn(async move {
-            agent.lock().await.clear();
+            if let Some(a) = agent.lock().await.as_mut() {
+                a.clear();
+            }
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(app) = app_weak.upgrade() {
                     app.set_messages(ModelRc::new(VecModel::from(Vec::<ChatMessage>::new())));
@@ -219,9 +267,12 @@ async fn main() {
         let app_weak = app_weak.clone();
 
         tokio::spawn(async move {
-            let agent = agent.lock().await;
-            let result = agent.export_history();
-            drop(agent);
+            let guard = agent.lock().await;
+            let result = match guard.as_ref() {
+                Some(a) => a.export_history(),
+                None => Err("에이전트가 초기화되지 않았습니다".to_string()),
+            };
+            drop(guard);
 
             match result {
                 Ok(json) => {

@@ -1,9 +1,9 @@
+use crate::config::Config;
 use crate::types::*;
 use futures_util::StreamExt;
 use reqwest::Client;
 use std::time::Duration;
 
-const DEFAULT_BASE_URL: &str = "https://open.bigmodel.cn/api/paas/v4";
 const MAX_RETRIES: usize = 3;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
@@ -16,7 +16,7 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
-    pub fn new(api_key: String, model: String, base_url: Option<String>) -> Self {
+    pub fn from_config(config: &Config) -> Self {
         let client = Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
@@ -26,9 +26,9 @@ impl ApiClient {
 
         Self {
             client,
-            api_key,
-            model,
-            base_url: base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+            api_key: config.api_key.clone(),
+            model: config.model.clone(),
+            base_url: config.base_url.clone(),
         }
     }
 

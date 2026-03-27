@@ -40,18 +40,104 @@ export component App inherits Window {
     callback send-message(string);
     callback clear-chat();
     callback save-session();
+    callback submit-api-key(string);
 
     // Properties
     in-out property <[ChatMessage]> messages: [];
     in-out property <string> status-text: "준비됨";
     in-out property <string> model-name: "glm-5-turbo";
+    in-out property <string> service-name: "Z.AI 코딩플랜";
     in-out property <string> current-dir: "";
     in-out property <string> streaming-text: "";
     in-out property <bool> is-streaming: false;
     in-out property <string> usage-text: "";
     in-out property <int> msg-count: 0;
+    in-out property <bool> needs-api-key: false;
 
-    VerticalLayout {
+    // ═══ API Key Setup Screen ═══
+    if needs-api-key : Rectangle {
+        background: #1a1b26;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 16px;
+            padding: 40px;
+
+            Text {
+                text: "✦ AURORA";
+                color: #7aa2f7;
+                font-size: 36px;
+                font-weight: 800;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Z.AI 코딩플랜 전용 AI 코딩 어시스턴트";
+                color: #565f89;
+                font-size: 14px;
+                horizontal-alignment: center;
+            }
+
+            Rectangle { height: 20px; }
+
+            Rectangle {
+                max-width: 480px;
+                background: #24283b;
+                border-radius: 12px;
+                border-width: 1px;
+                border-color: #292e42;
+                horizontal-stretch: 0;
+
+                VerticalLayout {
+                    padding: 28px;
+                    spacing: 14px;
+
+                    Text {
+                        text: "API 키 설정";
+                        color: #c0caf5;
+                        font-size: 16px;
+                        font-weight: 700;
+                    }
+
+                    Text {
+                        text: "Z.AI 코딩플랜 API 키를 입력하세요.\n키는 ~/.aurora/config.json에 안전하게 저장됩니다.";
+                        color: #565f89;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    api-key-input := LineEdit {
+                        placeholder-text: "API 키를 붙여넣으세요...";
+                        accepted(text) => {
+                            if text != "" {
+                                submit-api-key(text);
+                            }
+                        }
+                    }
+
+                    Button {
+                        text: "시작하기";
+                        primary: true;
+                        clicked => {
+                            if api-key-input.text != "" {
+                                submit-api-key(api-key-input.text);
+                            }
+                        }
+                    }
+                }
+            }
+
+            Text {
+                text: "엔드포인트: api.z.ai/api/coding/paas/v4";
+                color: #3b4261;
+                font-size: 11px;
+                horizontal-alignment: center;
+            }
+        }
+    }
+
+    // ═══ Main App ═══
+    if !needs-api-key : VerticalLayout {
         // ═══ Title Bar ═══
         Rectangle {
             height: 42px;
@@ -90,7 +176,7 @@ export component App inherits Window {
                     padding-top: 10px;
 
                     Text {
-                        text: model-name;
+                        text: service-name + " · " + model-name;
                         color: #7aa2f7;
                         font-size: 12px;
                         vertical-alignment: center;
