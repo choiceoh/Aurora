@@ -27,6 +27,7 @@ html2md = "0.2"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 grep-matcher = "0.1"
+unicode-width = "0.2"
 
 [build-dependencies]
 slint-build = "1"

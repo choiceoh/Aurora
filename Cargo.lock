@@ -454,6 +454,7 @@ dependencies = [
  "slint",
  "slint-build",
  "tokio",
+ "unicode-width",
 ]
 
 [[package]]

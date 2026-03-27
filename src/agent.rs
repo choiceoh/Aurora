@@ -12,7 +12,8 @@ const BASE_TOOLS: &str = r#"- read_file: Read file contents with line numbers (p
 - bash: Execute shell commands (command, optional timeout in seconds)
 - grep: Search file contents with regex (pattern, optional path/include filter)
 - glob: Find files by glob pattern (pattern, optional base path)
-- web_fetch: Fetch a web page and return cleaned content with metadata (url, optional include_metadata/raw)"#;
+- web_fetch: Fetch a web page and return cleaned content with metadata (url, optional include_metadata/raw)
+- telegram_format: Convert markdown tables to Telegram-compatible monospace format (text)"#;
 
 const DENEB_TOOLS: &str = r#"
 - ask_deneb: Deneb AI 에이전트에게 질문 전송 (message, optional session_key). Deneb은 장기 메모리를 가진 AI 에이전트입니다.
