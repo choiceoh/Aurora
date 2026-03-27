@@ -13,6 +13,8 @@ pub struct Config {
     pub base_url: String,
     #[serde(default = "default_model")]
     pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deneb_url: Option<String>,
 }
 
 fn default_base_url() -> String {
@@ -29,6 +31,7 @@ impl Default for Config {
             api_key: String::new(),
             base_url: default_base_url(),
             model: default_model(),
+            deneb_url: None,
         }
     }
 }
@@ -52,6 +55,12 @@ impl Config {
         if let Ok(key) = std::env::var("ZHIPUAI_API_KEY") {
             if !key.is_empty() {
                 config.api_key = key;
+            }
+        }
+
+        if let Ok(url) = std::env::var("DENEB_URL") {
+            if !url.is_empty() {
+                config.deneb_url = Some(url);
             }
         }
 
@@ -79,6 +88,7 @@ impl Config {
             api_key,
             base_url: default_base_url(),
             model: default_model(),
+            deneb_url: None,
         };
         config.save()?;
         Ok(config)

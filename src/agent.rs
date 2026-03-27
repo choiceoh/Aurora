@@ -6,17 +6,18 @@ const MAX_ITERATIONS: usize = 25;
 const MAX_CONTEXT_MESSAGES: usize = 100;
 const MAX_TOOL_RESULT_LEN: usize = 30_000;
 
-const SYSTEM_PROMPT: &str = r#"You are Aurora, an AI coding assistant. You help users with software engineering tasks.
-
-Available tools:
-- read_file: Read file contents with line numbers (path, optional offset/limit)
+const BASE_TOOLS: &str = r#"- read_file: Read file contents with line numbers (path, optional offset/limit)
 - write_file: Create or overwrite files (path, content)
 - edit_file: Replace exact string matches in files (path, old_string, new_string)
 - bash: Execute shell commands (command, optional timeout in seconds)
 - grep: Search file contents with regex (pattern, optional path/include filter)
-- glob: Find files by glob pattern (pattern, optional base path)
+- glob: Find files by glob pattern (pattern, optional base path)"#;
 
-Guidelines:
+const DENEB_TOOLS: &str = r#"
+- ask_deneb: Deneb AI 에이전트에게 질문 전송 (message, optional session_key). Deneb은 장기 메모리를 가진 AI 에이전트입니다.
+- deneb_memory: Deneb의 장기 메모리에서 검색 (query)"#;
+
+const GUIDELINES: &str = r#"Guidelines:
 1. Read files before modifying them to understand context
 2. old_string in edit_file must match exactly once in the file
 3. Use markdown with language identifiers for code blocks
@@ -24,27 +25,42 @@ Guidelines:
 5. Respond in the same language as the user
 6. When showing file changes, briefly explain what changed and why"#;
 
+fn build_system_prompt(deneb_connected: bool) -> String {
+    let mut prompt = String::from("You are Aurora, an AI coding assistant. You help users with software engineering tasks.\n\nAvailable tools:\n");
+    prompt.push_str(BASE_TOOLS);
+    if deneb_connected {
+        prompt.push_str(DENEB_TOOLS);
+    }
+    prompt.push_str("\n\n");
+    prompt.push_str(GUIDELINES);
+    prompt
+}
+
 pub struct Agent {
     client: ApiClient,
     registry: Registry,
     messages: Vec<Message>,
     total_prompt_tokens: i32,
     total_completion_tokens: i32,
+    deneb_connected: bool,
 }
 
 impl Agent {
-    pub fn new(client: ApiClient, registry: Registry) -> Self {
+    pub fn new(client: ApiClient, registry: Registry, deneb_connected: bool) -> Self {
+        let system_prompt = build_system_prompt(deneb_connected);
         Self {
             client,
             registry,
-            messages: vec![sys_msg()],
+            messages: vec![make_sys_msg(&system_prompt)],
             total_prompt_tokens: 0,
             total_completion_tokens: 0,
+            deneb_connected,
         }
     }
 
     pub fn clear(&mut self) {
-        self.messages = vec![sys_msg()];
+        let system_prompt = build_system_prompt(self.deneb_connected);
+        self.messages = vec![make_sys_msg(&system_prompt)];
         self.total_prompt_tokens = 0;
         self.total_completion_tokens = 0;
     }
@@ -64,7 +80,8 @@ impl Agent {
         let history: Vec<Message> =
             serde_json::from_str(json).map_err(|e| format!("Deserialize error: {e}"))?;
         let count = history.len();
-        self.messages = vec![sys_msg()];
+        let system_prompt = build_system_prompt(self.deneb_connected);
+        self.messages = vec![make_sys_msg(&system_prompt)];
         self.messages.extend(history);
         Ok(count)
     }
@@ -196,10 +213,10 @@ impl Agent {
     }
 }
 
-fn sys_msg() -> Message {
+fn make_sys_msg(prompt: &str) -> Message {
     Message {
         role: "system".to_string(),
-        content: Some(SYSTEM_PROMPT.to_string()),
+        content: Some(prompt.to_string()),
         tool_calls: None,
         tool_call_id: None,
     }
