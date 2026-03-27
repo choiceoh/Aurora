@@ -1,11 +1,14 @@
 pub mod bash;
+pub mod deneb;
 pub mod file;
 pub mod ripgrep_native;
 pub mod web_fetch;
 
+use crate::deneb::DenebClient;
 use crate::types::Tool;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub type ToolFn = Box<dyn Fn(Value) -> Result<String, String> + Send + Sync>;
 
@@ -15,7 +18,7 @@ pub struct Registry {
 }
 
 impl Registry {
-    pub fn new() -> Self {
+    pub fn new(deneb_client: Option<Arc<DenebClient>>) -> Self {
         let mut reg = Self {
             tools: HashMap::new(),
             defs: Vec::new(),
@@ -24,6 +27,9 @@ impl Registry {
         bash::register(&mut reg);
         ripgrep_native::register(&mut reg);
         web_fetch::register(&mut reg);
+        if let Some(client) = deneb_client {
+            deneb::register(&mut reg, client);
+        }
         reg
     }
 

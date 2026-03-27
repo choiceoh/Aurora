@@ -1,6 +1,7 @@
 mod agent;
 mod client;
 mod config;
+mod deneb;
 mod preprocessing;
 mod tools;
 mod types;
@@ -33,11 +34,39 @@ async fn main() {
         app.set_needs_api_key(false);
         app.set_model_name(SharedString::from(&config.model));
         app.set_service_name(SharedString::from(config.display_url()));
-        app.set_status_text(SharedString::from("준비됨"));
+
+        let deneb_client = config.deneb_url.as_ref().map(|url| {
+            Arc::new(deneb::DenebClient::new(url))
+        });
+        let deneb_connected = deneb_client.is_some();
 
         let api_client = ApiClient::from_config(&config);
-        let registry = Registry::new();
-        *agent.blocking_lock() = Some(Agent::new(api_client, registry));
+        let registry = Registry::new(deneb_client.clone());
+        *agent.blocking_lock() = Some(Agent::new(api_client, registry, deneb_connected));
+
+        if let Some(dc) = deneb_client {
+            let app_weak = app.as_weak();
+            tokio::spawn(async move {
+                match dc.health_check().await {
+                    Ok(true) => {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(app) = app_weak.upgrade() {
+                                app.set_status_text(SharedString::from("준비됨 (Deneb 연결됨)"));
+                            }
+                        });
+                    }
+                    _ => {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(app) = app_weak.upgrade() {
+                                app.set_status_text(SharedString::from("준비됨 (Deneb 연결 실패)"));
+                            }
+                        });
+                    }
+                }
+            });
+        } else {
+            app.set_status_text(SharedString::from("준비됨"));
+        }
     } else {
         // 설정 없음 → API 키 입력 화면
         app.set_needs_api_key(true);
@@ -54,16 +83,25 @@ async fn main() {
 
         match Config::init_with_key(key) {
             Ok(config) => {
+                let deneb_client = config.deneb_url.as_ref().map(|url| {
+                    Arc::new(deneb::DenebClient::new(url))
+                });
+                let deneb_connected = deneb_client.is_some();
+
                 let api_client = ApiClient::from_config(&config);
-                let registry = Registry::new();
-                let new_agent = Agent::new(api_client, registry);
+                let registry = Registry::new(deneb_client.clone());
+                let new_agent = Agent::new(api_client, registry, deneb_connected);
                 *agent_for_setup.blocking_lock() = Some(new_agent);
 
                 if let Some(app) = app_weak.upgrade() {
                     app.set_model_name(SharedString::from(&config.model));
                     app.set_service_name(SharedString::from(config.display_url()));
                     app.set_needs_api_key(false);
-                    app.set_status_text(SharedString::from("준비됨"));
+                    if deneb_connected {
+                        app.set_status_text(SharedString::from("준비됨 (Deneb 설정됨)"));
+                    } else {
+                        app.set_status_text(SharedString::from("준비됨"));
+                    }
                 }
             }
             Err(e) => {
