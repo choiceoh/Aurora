@@ -1,0 +1,538 @@
+import { Button, VerticalBox, HorizontalBox, LineEdit, ScrollView, TextEdit, ListView } from "std-widgets.slint";
+
+struct ChatMessage {
+    role: string,
+    content: string,
+    is-tool: bool,
+    tool-name: string,
+}
+
+component SidebarButton inherits Rectangle {
+    in property <string> label;
+    callback clicked;
+
+    height: 34px;
+    background: touch.has-hover ? #343952 : #292e42;
+    border-radius: 6px;
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: label;
+        color: touch.has-hover ? #c0caf5 : #a9b1d6;
+        font-size: 12px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component App inherits Window {
+    title: "Aurora - AI Coding Assistant";
+    preferred-width: 1100px;
+    preferred-height: 750px;
+    min-width: 600px;
+    min-height: 400px;
+    background: #1a1b26;
+
+    // Callbacks
+    callback send-message(string);
+    callback clear-chat();
+    callback save-session();
+    callback submit-api-key(string);
+
+    // Properties
+    in-out property <[ChatMessage]> messages: [];
+    in-out property <string> status-text: "준비됨";
+    in-out property <string> model-name: "glm-5-turbo";
+    in-out property <string> service-name: "Z.AI 코딩플랜";
+    in-out property <string> current-dir: "";
+    in-out property <string> streaming-text: "";
+    in-out property <bool> is-streaming: false;
+    in-out property <string> usage-text: "";
+    in-out property <int> msg-count: 0;
+    in-out property <bool> needs-api-key: false;
+
+    // ═══ API Key Setup Screen ═══
+    if needs-api-key : Rectangle {
+        background: #1a1b26;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 16px;
+            padding: 40px;
+
+            Text {
+                text: "✦ AURORA";
+                color: #7aa2f7;
+                font-size: 36px;
+                font-weight: 800;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "Z.AI 코딩플랜 전용 AI 코딩 어시스턴트";
+                color: #565f89;
+                font-size: 14px;
+                horizontal-alignment: center;
+            }
+
+            Rectangle { height: 20px; }
+
+            Rectangle {
+                max-width: 480px;
+                background: #24283b;
+                border-radius: 12px;
+                border-width: 1px;
+                border-color: #292e42;
+                horizontal-stretch: 0;
+
+                VerticalLayout {
+                    padding: 28px;
+                    spacing: 14px;
+
+                    Text {
+                        text: "API 키 설정";
+                        color: #c0caf5;
+                        font-size: 16px;
+                        font-weight: 700;
+                    }
+
+                    Text {
+                        text: "Z.AI 코딩플랜 API 키를 입력하세요.\n키는 ~/.aurora/config.json에 안전하게 저장됩니다.";
+                        color: #565f89;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    api-key-input := LineEdit {
+                        placeholder-text: "API 키를 붙여넣으세요...";
+                        accepted(text) => {
+                            if text != "" {
+                                submit-api-key(text);
+                            }
+                        }
+                    }
+
+                    Button {
+                        text: "시작하기";
+                        primary: true;
+                        clicked => {
+                            if api-key-input.text != "" {
+                                submit-api-key(api-key-input.text);
+                            }
+                        }
+                    }
+                }
+            }
+
+            Text {
+                text: "엔드포인트: api.z.ai/api/coding/paas/v4";
+                color: #3b4261;
+                font-size: 11px;
+                horizontal-alignment: center;
+            }
+        }
+    }
+
+    // ═══ Main App ═══
+    if !needs-api-key : VerticalLayout {
+        // ═══ Title Bar ═══
+        Rectangle {
+            height: 42px;
+            background: #1f2335;
+            border-width: 0px;
+
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                alignment: space-between;
+
+                HorizontalLayout {
+                    alignment: start;
+                    spacing: 8px;
+                    padding-top: 10px;
+
+                    Text {
+                        text: "✦ AURORA";
+                        color: #7aa2f7;
+                        font-size: 15px;
+                        font-weight: 800;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: "v0.1";
+                        color: #3b4261;
+                        font-size: 11px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 20px;
+                    padding-top: 10px;
+
+                    Text {
+                        text: service-name + " · " + model-name;
+                        color: #7aa2f7;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: is-streaming ? #e0af68 : #9ece6a;
+                        y: 4px;
+                    }
+
+                    Text {
+                        text: status-text;
+                        color: is-streaming ? #e0af68 : #9ece6a;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        // Separator
+        Rectangle {
+            height: 1px;
+            background: #292e42;
+        }
+
+        // ═══ Main Content ═══
+        HorizontalLayout {
+            // ─── Sidebar ───
+            Rectangle {
+                width: 220px;
+                background: #24283b;
+
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 6px;
+
+                    // Section: Project
+                    Text {
+                        text: "프로젝트";
+                        color: #7aa2f7;
+                        font-size: 11px;
+                        font-weight: 700;
+                        letter-spacing: 1px;
+                    }
+
+                    Rectangle {
+                        height: 36px;
+                        background: #1f2335;
+                        border-radius: 6px;
+
+                        Text {
+                            text: current-dir;
+                            color: #a9b1d6;
+                            font-size: 11px;
+                            overflow: elide;
+                            horizontal-alignment: left;
+                            vertical-alignment: center;
+                            x: 10px;
+                        }
+                    }
+
+                    Rectangle { height: 8px; }
+
+                    // Section: Actions
+                    Text {
+                        text: "작업";
+                        color: #7aa2f7;
+                        font-size: 11px;
+                        font-weight: 700;
+                        letter-spacing: 1px;
+                    }
+
+                    SidebarButton {
+                        label: "💾  세션 저장";
+                        clicked => { save-session(); }
+                    }
+
+                    SidebarButton {
+                        label: "🗑️  대화 초기화";
+                        clicked => { clear-chat(); }
+                    }
+
+                    Rectangle { height: 8px; }
+
+                    // Section: Guide
+                    Text {
+                        text: "사용법";
+                        color: #7aa2f7;
+                        font-size: 11px;
+                        font-weight: 700;
+                        letter-spacing: 1px;
+                    }
+
+                    Text {
+                        text: "코드 작성 및 수정\n파일 검색 및 분석\n빌드, 테스트 실행\nGit 커밋 / 브랜치 관리";
+                        color: #565f89;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    // Spacer
+                    Rectangle { vertical-stretch: 1; }
+
+                    // Stats
+                    Rectangle {
+                        height: 1px;
+                        background: #292e42;
+                    }
+
+                    Text {
+                        text: usage-text;
+                        color: #3b4261;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+
+                    Text {
+                        text: "메시지 " + msg-count;
+                        color: #3b4261;
+                        font-size: 11px;
+                    }
+                }
+            }
+
+            // Sidebar border
+            Rectangle {
+                width: 1px;
+                background: #292e42;
+            }
+
+            // ─── Chat Area ───
+            VerticalLayout {
+                // Messages
+                ScrollView {
+                    vertical-stretch: 1;
+
+                    VerticalLayout {
+                        padding-left: 32px;
+                        padding-right: 32px;
+                        padding-top: 20px;
+                        padding-bottom: 20px;
+                        spacing: 12px;
+                        alignment: start;
+
+                        // Welcome
+                        if messages.length == 0 && streaming-text == "" : VerticalLayout {
+                            alignment: center;
+                            spacing: 8px;
+                            padding-top: 120px;
+
+                            Text {
+                                text: "AURORA";
+                                color: #7aa2f7;
+                                font-size: 48px;
+                                font-weight: 800;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: "AI 코딩 어시스턴트";
+                                color: #565f89;
+                                font-size: 16px;
+                                horizontal-alignment: center;
+                            }
+
+                            Rectangle { height: 24px; }
+
+                            // Feature cards
+                            HorizontalLayout {
+                                spacing: 12px;
+                                alignment: center;
+
+                                for card-text in ["📝 코드 작성·편집", "🔍 파일 검색·분석", "⚡ 빌드·테스트 실행"] : Rectangle {
+                                    width: 160px;
+                                    height: 48px;
+                                    background: #24283b;
+                                    border-radius: 8px;
+                                    border-width: 1px;
+                                    border-color: #292e42;
+
+                                    Text {
+                                        text: card-text;
+                                        color: #a9b1d6;
+                                        font-size: 12px;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Message list
+                        for msg in messages : Rectangle {
+                            background: msg.is-tool ? #1a1e30 :
+                                        msg.role == "user" ? #1f2335 : transparent;
+                            border-radius: 8px;
+                            border-width: msg.role == "user" ? 1px : 0px;
+                            border-color: #292e42;
+
+                            VerticalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                padding-top: msg.is-tool ? 8px : 12px;
+                                padding-bottom: msg.is-tool ? 8px : 12px;
+                                spacing: 6px;
+
+                                // Header
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    alignment: start;
+
+                                    Rectangle {
+                                        width: 24px;
+                                        height: 24px;
+                                        border-radius: 5px;
+                                        background: msg.role == "user" ? #3d59a1 :
+                                                    msg.is-tool ? #2d3220 : #2d3250;
+
+                                        Text {
+                                            text: msg.role == "user" ? "U" :
+                                                  msg.is-tool ? "⚡" : "A";
+                                            color: msg.role == "user" ? #7aa2f7 :
+                                                   msg.is-tool ? #e0af68 : #7dcfff;
+                                            font-size: 11px;
+                                            font-weight: 700;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: msg.role == "user" ? "You" :
+                                              msg.is-tool ? msg.tool-name : "Aurora";
+                                        color: msg.role == "user" ? #7aa2f7 :
+                                               msg.is-tool ? #e0af68 : #7dcfff;
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                // Content
+                                Text {
+                                    text: msg.content;
+                                    color: msg.is-tool ? #7a7f96 : #c0caf5;
+                                    font-size: msg.is-tool ? 12px : 14px;
+                                    font-family: msg.is-tool ? "monospace" : "default";
+                                    wrap: word-wrap;
+                                    horizontal-alignment: left;
+                                }
+                            }
+                        }
+
+                        // Streaming text
+                        if streaming-text != "" : Rectangle {
+                            border-radius: 8px;
+
+                            VerticalLayout {
+                                padding-left: 14px;
+                                padding-right: 14px;
+                                padding-top: 12px;
+                                padding-bottom: 12px;
+                                spacing: 6px;
+
+                                HorizontalLayout {
+                                    spacing: 8px;
+
+                                    Rectangle {
+                                        width: 24px;
+                                        height: 24px;
+                                        border-radius: 5px;
+                                        background: #2d3250;
+
+                                        Text {
+                                            text: "A";
+                                            color: #7dcfff;
+                                            font-size: 11px;
+                                            font-weight: 700;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "Aurora";
+                                        color: #7dcfff;
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        vertical-alignment: center;
+                                    }
+
+                                    if is-streaming : Text {
+                                        text: "●";
+                                        color: #e0af68;
+                                        font-size: 10px;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                Text {
+                                    text: streaming-text;
+                                    color: #c0caf5;
+                                    font-size: 14px;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ─── Input Area ───
+                Rectangle {
+                    height: 1px;
+                    background: #292e42;
+                }
+
+                Rectangle {
+                    min-height: 72px;
+                    max-height: 120px;
+                    background: #1f2335;
+
+                    HorizontalLayout {
+                        padding-left: 20px;
+                        padding-right: 12px;
+                        padding-top: 14px;
+                        padding-bottom: 14px;
+                        spacing: 10px;
+
+                        input-field := LineEdit {
+                            placeholder-text: is-streaming ? "응답 생성 중..." : "메시지를 입력하세요... (Enter로 전송)";
+                            enabled: !is-streaming;
+                            accepted(text) => {
+                                if text != "" {
+                                    send-message(text);
+                                    self.text = "";
+                                }
+                            }
+                        }
+
+                        Button {
+                            text: is-streaming ? "..." : "전송";
+                            enabled: !is-streaming;
+                            primary: true;
+                            clicked => {
+                                if input-field.text != "" {
+                                    send-message(input-field.text);
+                                    input-field.text = "";
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

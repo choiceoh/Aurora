@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Aurora
+GenericName=AI Coding Assistant
+Comment=Native desktop AI coding assistant powered by GLM-5 Turbo
+Exec=aurora
+Icon=aurora
+Terminal=false
+Type=Application
+Categories=Development;IDE;TextEditor;
+Keywords=ai;coding;assistant;llm;
+StartupWMClass=aurora
