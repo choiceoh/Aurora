@@ -1,8 +1,19 @@
 use regex::Regex;
-use ego_tree;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
+
+/// Safely slice a string up to `max` bytes, never panicking on multi-byte boundaries.
+fn safe_prefix(s: &str, max: usize) -> &str {
+    if s.len() <= max {
+        return s;
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
 
 // ─── Compiled regex patterns (compiled once, reused forever) ───
 
@@ -13,7 +24,7 @@ macro_rules! lazy_regex {
 }
 
 // Noise element patterns (matched against tag+class+id)
-static RE_NAV: LazyLock<Regex> = lazy_regex!(r"(?i)(nav|navbar|navigation|menu|sidebar|side-bar)");
+static RE_NAV: LazyLock<Regex> = lazy_regex!(r"(?i)(nav(bar|igation)?|main[-_]?menu|sidebar|side-bar)");
 static RE_FOOTER: LazyLock<Regex> = lazy_regex!(r"(?i)(footer|foot|bottom-bar)");
 static RE_AD: LazyLock<Regex> =
     lazy_regex!(r"(?i)(ad[-_]?banner|advert|ads[-_]?container|sponsor|promo[-_]?box|google[-_]?ad)");
@@ -22,7 +33,7 @@ static RE_COOKIE: LazyLock<Regex> =
 static RE_SOCIAL: LazyLock<Regex> =
     lazy_regex!(r"(?i)(social[-_]?(share|links|buttons|widget)|share[-_]?(bar|buttons))");
 static RE_POPUP: LazyLock<Regex> =
-    lazy_regex!(r"(?i)(popup|modal|overlay|lightbox|newsletter[-_]?(signup|modal))");
+    lazy_regex!(r"(?i)(popup|modal[-_]?(dialog|window|backdrop)|lightbox|newsletter[-_]?(signup|modal))");
 static RE_COMMENT_SECTION: LazyLock<Regex> =
     lazy_regex!(r"(?i)(comments?[-_]?(section|area|list|block)|disqus)");
 static RE_RELATED: LazyLock<Regex> =
@@ -46,8 +57,10 @@ static RE_MULTI_SPACE: LazyLock<Regex> = lazy_regex!(r"[ \t]{2,}");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreprocessResult {
-    /// Cleaned HTML content with noise elements removed
+    /// Cleaned plain text content with noise elements removed
     pub cleaned: String,
+    /// Cleaned HTML with noise elements removed (for downstream markdown conversion)
+    pub cleaned_html: String,
     /// Extracted metadata
     pub metadata: HtmlMetadata,
     /// Quality signals detected in the page
@@ -126,13 +139,14 @@ pub fn preprocess_html(raw_html: &str) -> PreprocessResult {
     // Phase 2: Detect quality signals (checks both DOM and raw text)
     let signals = detect_quality_signals(&document, raw_html);
 
-    // Phase 3: Clean HTML by removing noise elements, return text content
-    let (cleaned, elements_removed) = strip_noise(&document);
+    // Phase 3: Clean HTML by removing noise elements, return text + cleaned HTML
+    let (cleaned, cleaned_html, elements_removed) = strip_noise(&document);
 
     let cleaned_len = cleaned.len();
 
     PreprocessResult {
         cleaned,
+        cleaned_html,
         metadata,
         signals,
         stats: ProcessingStats {
@@ -229,7 +243,7 @@ fn extract_metadata(document: &Html, raw_html: &str) -> HtmlMetadata {
 
     // Charset fallback: detect from raw HTML if not found in meta
     if meta.charset.is_none() {
-        let head_portion = &raw_html[..raw_html.len().min(2048)];
+        let head_portion = safe_prefix(raw_html, 2048);
         let lower = head_portion.to_lowercase();
         if let Some(pos) = lower.find("charset=") {
             let after = &head_portion[pos + 8..];
@@ -251,7 +265,7 @@ fn detect_quality_signals(document: &Html, raw_html: &str) -> QualitySignals {
     let mut signals = QualitySignals::default();
 
     // Check raw HTML text for signal patterns (single pass over text)
-    let check_text = &raw_html[..raw_html.len().min(50_000)];
+    let check_text = safe_prefix(raw_html, 50_000);
 
     if RE_PAYWALL.is_match(check_text) {
         signals.has_paywall = true;
@@ -301,11 +315,10 @@ fn detect_quality_signals(document: &Html, raw_html: &str) -> QualitySignals {
     signals
 }
 
-/// Strip noise elements from HTML document, return cleaned text content.
-fn strip_noise(document: &Html) -> (String, usize) {
-    let mut removed = 0usize;
-
-    // Collect IDs of elements to skip
+/// Strip noise elements from HTML document.
+/// Returns (cleaned_text, cleaned_html, elements_removed).
+fn strip_noise(document: &Html) -> (String, String, usize) {
+    // Collect IDs of elements to skip (using HashSet for dedup)
     let mut skip_ids = std::collections::HashSet::new();
 
     // Mark noise tags for removal
@@ -313,7 +326,6 @@ fn strip_noise(document: &Html) -> (String, usize) {
         if let Ok(sel) = Selector::parse(tag_name) {
             for el in document.select(&sel) {
                 skip_ids.insert(el.id());
-                removed += 1;
             }
         }
     }
@@ -323,7 +335,6 @@ fn strip_noise(document: &Html) -> (String, usize) {
         if let Ok(sel) = Selector::parse(selector_str) {
             for el in document.select(&sel) {
                 skip_ids.insert(el.id());
-                removed += 1;
             }
         }
     }
@@ -349,22 +360,103 @@ fn strip_noise(document: &Html) -> (String, usize) {
             for pattern in noise_patterns {
                 if pattern.is_match(&combined) {
                     skip_ids.insert(el.id());
-                    removed += 1;
                     break;
                 }
             }
         }
     }
 
-    // Extract text from body, skipping marked elements
+    let removed = skip_ids.len();
+
+    // Extract plain text from body, skipping marked elements
     let cleaned = extract_text_excluding(document, &skip_ids);
 
-    // Normalize whitespace
+    // Rebuild HTML with noise elements removed
+    let cleaned_html = rebuild_html_excluding(document, &skip_ids);
+
+    // Normalize whitespace in plain text
     let cleaned = RE_MULTI_NEWLINE.replace_all(&cleaned, "\n\n").to_string();
     let cleaned = RE_MULTI_SPACE.replace_all(&cleaned, " ").to_string();
     let cleaned = cleaned.trim().to_string();
 
-    (cleaned, removed)
+    (cleaned, cleaned_html, removed)
+}
+
+/// Rebuild HTML string from the document, excluding noise elements.
+/// This produces minimal HTML suitable for html2md conversion.
+fn rebuild_html_excluding(
+    document: &Html,
+    skip_ids: &std::collections::HashSet<ego_tree::NodeId>,
+) -> String {
+    use scraper::node::Node;
+
+    let mut output = String::new();
+
+    let body_sel = Selector::parse("body").unwrap();
+    let body = match document.select(&body_sel).next() {
+        Some(b) => b,
+        None => return output,
+    };
+
+    fn walk_html(
+        node_ref: ego_tree::NodeRef<'_, Node>,
+        skip_ids: &std::collections::HashSet<ego_tree::NodeId>,
+        output: &mut String,
+    ) {
+        if skip_ids.contains(&node_ref.id()) {
+            return;
+        }
+
+        match node_ref.value() {
+            Node::Text(text) => {
+                // Escape HTML entities in text nodes
+                let t = &text.text;
+                for ch in t.chars() {
+                    match ch {
+                        '&' => output.push_str("&amp;"),
+                        '<' => output.push_str("&lt;"),
+                        '>' => output.push_str("&gt;"),
+                        _ => output.push(ch),
+                    }
+                }
+            }
+            Node::Element(el) => {
+                let tag = el.name();
+                output.push('<');
+                output.push_str(tag);
+                for (key, val) in el.attrs() {
+                    output.push(' ');
+                    output.push_str(key);
+                    output.push_str("=\"");
+                    output.push_str(val);
+                    output.push('"');
+                }
+                output.push('>');
+
+                for child in node_ref.children() {
+                    walk_html(child, skip_ids, output);
+                }
+
+                // Close tag (skip void elements)
+                if !matches!(tag, "br" | "hr" | "img" | "input" | "meta" | "link" | "source" | "col" | "area" | "base" | "embed" | "wbr") {
+                    output.push_str("</");
+                    output.push_str(tag);
+                    output.push('>');
+                }
+            }
+            _ => {
+                for child in node_ref.children() {
+                    walk_html(child, skip_ids, output);
+                }
+            }
+        }
+    }
+
+    for child in body.children() {
+        walk_html(child, skip_ids, &mut output);
+    }
+
+    output
 }
 
 /// Extract text content from the document body, excluding elements with given IDs.

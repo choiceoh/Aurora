@@ -74,7 +74,7 @@ fn native_grep(args: Value) -> Result<String, String> {
         .build(pattern)
         .map_err(|e| format!("Invalid regex: {e}"))?;
 
-    // Build the searcher with binary detection and optional context
+    // Build a searcher config (reused to create searchers without clone overhead)
     let mut searcher_builder = SearcherBuilder::new();
     searcher_builder
         .binary_detection(BinaryDetection::quit(0x00))
@@ -86,15 +86,13 @@ fn native_grep(args: Value) -> Result<String, String> {
             .after_context(context_lines);
     }
 
-    let searcher = searcher_builder.build();
-
     let base = resolve_path(search_path)?;
     let mut results = Vec::new();
 
     if Path::new(&base).is_file() {
-        search_file(&base, &base, &matcher, searcher.clone(), &mut results);
+        search_file(&base, &base, &matcher, &searcher_builder, &mut results);
     } else {
-        walk_and_search(&base, &base, &matcher, searcher, include, &mut results);
+        walk_and_search(&base, &base, &matcher, &searcher_builder, include, &mut results);
     }
 
     if results.is_empty() {
@@ -112,9 +110,10 @@ fn search_file(
     file_path: &str,
     base: &str,
     matcher: &grep_regex::RegexMatcher,
-    mut searcher: grep_searcher::Searcher,
+    searcher_builder: &SearcherBuilder,
     results: &mut Vec<String>,
 ) {
+    let mut searcher = searcher_builder.build();
     let rel = Path::new(file_path)
         .strip_prefix(base)
         .unwrap_or(Path::new(file_path))
@@ -148,7 +147,7 @@ fn walk_and_search(
     dir: &str,
     base: &str,
     matcher: &grep_regex::RegexMatcher,
-    searcher: grep_searcher::Searcher,
+    searcher_builder: &SearcherBuilder,
     include: Option<&str>,
     results: &mut Vec<String>,
 ) {
@@ -173,7 +172,7 @@ fn walk_and_search(
             if SKIP_DIRS.contains(&name.as_str()) {
                 continue;
             }
-            walk_and_search(&path.to_string_lossy(), base, matcher, searcher.clone(), include, results);
+            walk_and_search(&path.to_string_lossy(), base, matcher, searcher_builder, include, results);
         } else {
             if is_binary(&name) {
                 continue;
@@ -183,7 +182,7 @@ fn walk_and_search(
                     continue;
                 }
             }
-            search_file(&path.to_string_lossy(), base, matcher, searcher.clone(), results);
+            search_file(&path.to_string_lossy(), base, matcher, searcher_builder, results);
         }
     }
 }

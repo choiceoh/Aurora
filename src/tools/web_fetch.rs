@@ -1,9 +1,20 @@
 use super::Registry;
 use crate::preprocessing::{self, WebContentConfig};
 use serde_json::{json, Value};
+use std::sync::LazyLock;
 
 const MAX_HTML_SIZE: usize = 5 * 1024 * 1024; // 5MB
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
+
+/// Shared HTTP client — initialized once, reuses TLS sessions and connection pool.
+static HTTP_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(DEFAULT_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .user_agent("Mozilla/5.0 (compatible; Aurora/0.1; +https://github.com/choiceoh/Aurora)")
+        .build()
+        .expect("Failed to build HTTP client")
+});
 
 pub fn register(reg: &mut Registry) {
     reg.register_tool(
@@ -70,14 +81,7 @@ fn web_fetch(args: Value) -> Result<String, String> {
 }
 
 fn fetch_url(url: &str) -> Result<String, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .user_agent("Mozilla/5.0 (compatible; Aurora/0.1; +https://github.com/choiceoh/Aurora)")
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
-
-    let response = client
+    let response = HTTP_CLIENT
         .get(url)
         .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
         .header("Accept-Language", "en-US,en;q=0.5,ko;q=0.3")

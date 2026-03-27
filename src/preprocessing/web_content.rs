@@ -60,9 +60,9 @@ pub fn process_web_content(raw_html: &str, config: &WebContentConfig) -> WebCont
     let preprocess = html_preprocess::preprocess_html(raw_html);
     let original_size = preprocess.stats.original_len;
 
-    // Step 2: Convert cleaned HTML/text to Markdown (or use cleaned text directly)
+    // Step 2: Convert noise-stripped HTML to Markdown (or use cleaned text directly)
     let body = if config.to_markdown {
-        convert_to_markdown(raw_html, &preprocess)
+        convert_to_markdown(&preprocess)
     } else {
         preprocess.cleaned.clone()
     };
@@ -82,21 +82,12 @@ pub fn process_web_content(raw_html: &str, config: &WebContentConfig) -> WebCont
     }
 }
 
-/// Convert raw HTML to Markdown, using the preprocessing result to skip noise.
+/// Convert noise-stripped HTML to Markdown.
 ///
-/// Uses html2md for proper Markdown conversion (links, tables, code blocks, etc.)
-/// rather than the plain-text extraction from the preprocessor.
-fn convert_to_markdown(raw_html: &str, _preprocess: &PreprocessResult) -> String {
-    // html2md handles the full conversion including:
-    // - Headings → # / ## / ###
-    // - Links → [text](url)
-    // - Lists → - / 1.
-    // - Code blocks → ```
-    // - Tables → | col | col |
-    // - Bold/italic → **bold** / *italic*
-    let md = html2md::parse_html(raw_html);
-
-    // Clean up excessive whitespace from conversion
+/// Uses the cleaned HTML from preprocessing (noise already removed) so html2md
+/// only parses content once — no double parsing of the original HTML.
+fn convert_to_markdown(preprocess: &PreprocessResult) -> String {
+    let md = html2md::parse_html(&preprocess.cleaned_html);
     clean_markdown(&md)
 }
 
@@ -139,14 +130,22 @@ fn truncate_by_sections(content: &str, max_chars: usize) -> (String, bool) {
         return (content.to_string(), false);
     }
 
-    // Find the best break point before max_chars
-    let search_region = &content[..max_chars];
+    // Find a safe UTF-8 boundary for the search region
+    let safe_end = {
+        let mut pos = max_chars;
+        while pos > 0 && !content.is_char_boundary(pos) {
+            pos -= 1;
+        }
+        pos
+    };
+    let search_region = &content[..safe_end];
+
+    let min_keep = safe_end * 3 / 5; // keep at least 60%
 
     // Priority 1: Break at a heading (## or #)
     let mut best_break = None;
     for (i, _) in search_region.rmatch_indices("\n#") {
-        // Make sure we're not cutting off too much (keep at least 60%)
-        if i >= max_chars * 3 / 5 {
+        if i >= min_keep {
             best_break = Some(i);
             break;
         }
@@ -155,7 +154,7 @@ fn truncate_by_sections(content: &str, max_chars: usize) -> (String, bool) {
     // Priority 2: Break at a double newline (paragraph boundary)
     if best_break.is_none() {
         for (i, _) in search_region.rmatch_indices("\n\n") {
-            if i >= max_chars * 3 / 5 {
+            if i >= min_keep {
                 best_break = Some(i);
                 break;
             }
@@ -165,22 +164,15 @@ fn truncate_by_sections(content: &str, max_chars: usize) -> (String, bool) {
     // Priority 3: Break at a single newline
     if best_break.is_none() {
         for (i, _) in search_region.rmatch_indices('\n') {
-            if i >= max_chars * 3 / 5 {
+            if i >= min_keep {
                 best_break = Some(i);
                 break;
             }
         }
     }
 
-    // Fallback: hard truncate at char boundary
-    let break_at = best_break.unwrap_or_else(|| {
-        // Find a safe UTF-8 boundary
-        let mut pos = max_chars;
-        while pos > 0 && !content.is_char_boundary(pos) {
-            pos -= 1;
-        }
-        pos
-    });
+    // Fallback: use the safe_end we already computed
+    let break_at = best_break.unwrap_or(safe_end);
 
     let truncated = content[..break_at].trim_end().to_string();
     (truncated, true)
