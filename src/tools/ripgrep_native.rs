@@ -192,7 +192,10 @@ fn glob_search(args: Value) -> Result<String, String> {
     let base_path = args["path"].as_str().unwrap_or(".");
 
     let base = resolve_path(base_path)?;
-    let full_pattern = format!("{}/{}", base, pattern);
+    let full_pattern = std::path::Path::new(&base)
+        .join(pattern)
+        .to_string_lossy()
+        .to_string();
 
     let matches: Vec<String> = glob::glob(&full_pattern)
         .map_err(|e| format!("Invalid glob: {e}"))?
