@@ -36,8 +36,13 @@ fn execute_bash(args: Value) -> Result<String, String> {
     let timeout_secs = timeout_secs.min(MAX_TIMEOUT);
     let timeout = Duration::from_secs(timeout_secs);
 
-    let mut child = Command::new("bash")
-        .arg("-c")
+    #[cfg(target_os = "windows")]
+    let (shell, flag) = ("cmd.exe", "/C");
+    #[cfg(not(target_os = "windows"))]
+    let (shell, flag) = ("bash", "-c");
+
+    let mut child = Command::new(shell)
+        .arg(flag)
         .arg(command)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

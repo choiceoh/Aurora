@@ -30,7 +30,8 @@ jobs:
         run: choco install innosetup -y
 
       - name: Create installer
-        run: iscc installer/windows/setup.iss
+        run: |
+          "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" installer\windows\setup.iss
         shell: cmd
 
       - name: Upload artifacts
