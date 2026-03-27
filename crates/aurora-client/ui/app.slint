@@ -41,21 +41,106 @@ export component App inherits Window {
     callback clear-chat();
     callback save-session();
     callback submit-api-key(string);
+    callback connect-server(string);
 
     // Properties
     in-out property <[ChatMessage]> messages: [];
-    in-out property <string> status-text: "준비됨";
-    in-out property <string> model-name: "glm-5-turbo";
-    in-out property <string> service-name: "Z.AI 코딩플랜";
+    in-out property <string> status-text: "서버 연결 대기 중...";
+    in-out property <string> model-name: "";
+    in-out property <string> service-name: "";
     in-out property <string> current-dir: "";
     in-out property <string> streaming-text: "";
     in-out property <bool> is-streaming: false;
     in-out property <string> usage-text: "";
     in-out property <int> msg-count: 0;
     in-out property <bool> needs-api-key: false;
+    in-out property <bool> needs-server-url: true;
+    in-out property <string> connection-status: "disconnected";
+
+    // ═══ Server Connection Screen ═══
+    if needs-server-url : Rectangle {
+        background: #1a1b26;
+
+        VerticalLayout {
+            alignment: center;
+            spacing: 16px;
+            padding: 40px;
+
+            Text {
+                text: "✦ AURORA";
+                color: #7aa2f7;
+                font-size: 36px;
+                font-weight: 800;
+                horizontal-alignment: center;
+            }
+
+            Text {
+                text: "AI 코딩 어시스턴트 — 클라이언트";
+                color: #565f89;
+                font-size: 14px;
+                horizontal-alignment: center;
+            }
+
+            Rectangle { height: 20px; }
+
+            Rectangle {
+                max-width: 480px;
+                background: #24283b;
+                border-radius: 12px;
+                border-width: 1px;
+                border-color: #292e42;
+                horizontal-stretch: 0;
+
+                VerticalLayout {
+                    padding: 28px;
+                    spacing: 14px;
+
+                    Text {
+                        text: "서버 연결";
+                        color: #c0caf5;
+                        font-size: 16px;
+                        font-weight: 700;
+                    }
+
+                    Text {
+                        text: "Aurora 서버의 WebSocket 주소를 입력하세요.";
+                        color: #565f89;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+
+                    server-url-input := LineEdit {
+                        placeholder-text: "ws://192.168.1.100:3710/ws";
+                        accepted(text) => {
+                            if text != "" {
+                                connect-server(text);
+                            }
+                        }
+                    }
+
+                    Button {
+                        text: "연결";
+                        primary: true;
+                        clicked => {
+                            if server-url-input.text != "" {
+                                connect-server(server-url-input.text);
+                            }
+                        }
+                    }
+                }
+            }
+
+            Text {
+                text: status-text;
+                color: #3b4261;
+                font-size: 11px;
+                horizontal-alignment: center;
+            }
+        }
+    }
 
     // ═══ API Key Setup Screen ═══
-    if needs-api-key : Rectangle {
+    if !needs-server-url && needs-api-key : Rectangle {
         background: #1a1b26;
 
         VerticalLayout {
@@ -100,7 +185,7 @@ export component App inherits Window {
                     }
 
                     Text {
-                        text: "Z.AI 코딩플랜 API 키를 입력하세요.\n키는 ~/.aurora/config.json에 안전하게 저장됩니다.";
+                        text: "Z.AI 코딩플랜 API 키를 입력하세요.\n서버에 전송되어 저장됩니다.";
                         color: #565f89;
                         font-size: 12px;
                         wrap: word-wrap;
@@ -137,7 +222,7 @@ export component App inherits Window {
     }
 
     // ═══ Main App ═══
-    if !needs-api-key : VerticalLayout {
+    if !needs-server-url && !needs-api-key : VerticalLayout {
         // ═══ Title Bar ═══
         Rectangle {
             height: 42px;
@@ -186,13 +271,15 @@ export component App inherits Window {
                         width: 8px;
                         height: 8px;
                         border-radius: 4px;
-                        background: is-streaming ? #e0af68 : #9ece6a;
+                        background: is-streaming ? #e0af68 :
+                                    connection-status == "connected" ? #9ece6a : #f7768e;
                         y: 4px;
                     }
 
                     Text {
                         text: status-text;
-                        color: is-streaming ? #e0af68 : #9ece6a;
+                        color: is-streaming ? #e0af68 :
+                               connection-status == "connected" ? #9ece6a : #f7768e;
                         font-size: 12px;
                         vertical-alignment: center;
                     }
@@ -217,9 +304,9 @@ export component App inherits Window {
                     padding: 12px;
                     spacing: 6px;
 
-                    // Section: Project
+                    // Section: Connection
                     Text {
-                        text: "프로젝트";
+                        text: "서버";
                         color: #7aa2f7;
                         font-size: 11px;
                         font-weight: 700;
@@ -231,14 +318,25 @@ export component App inherits Window {
                         background: #1f2335;
                         border-radius: 6px;
 
-                        Text {
-                            text: current-dir;
-                            color: #a9b1d6;
-                            font-size: 11px;
-                            overflow: elide;
-                            horizontal-alignment: left;
-                            vertical-alignment: center;
-                            x: 10px;
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            spacing: 6px;
+                            alignment: start;
+
+                            Rectangle {
+                                width: 6px;
+                                height: 6px;
+                                border-radius: 3px;
+                                background: connection-status == "connected" ? #9ece6a : #f7768e;
+                                y: 15px;
+                            }
+
+                            Text {
+                                text: connection-status == "connected" ? "연결됨" : "연결 끊김";
+                                color: #a9b1d6;
+                                font-size: 11px;
+                                vertical-alignment: center;
+                            }
                         }
                     }
 

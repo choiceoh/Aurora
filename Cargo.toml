@@ -1,64 +1,7 @@
-[package]
-name = "aurora"
-version = "0.1.0"
-edition = "2024"
-build = "build.rs"
-authors = ["choiceoh"]
-description = "AI Coding Assistant - Native desktop app powered by GLM-5 Turbo"
-license = "MIT"
-repository = "https://github.com/choiceoh/Aurora"
-readme = "README.md"
-keywords = ["ai", "coding", "assistant", "llm", "slint"]
-categories = ["development-tools", "gui"]
-
-[dependencies]
-slint = "1"
-tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-futures-util = "0.3"
-glob = "0.3"
-regex = "1"
-dirs = "6"
-scraper = "0.22"
-ego-tree = "0.10"
-html2md = "0.2"
-grep-regex = "0.1"
-grep-searcher = "0.1"
-grep-matcher = "0.1"
-
-[build-dependencies]
-slint-build = "1"
-
-[profile.release]
-opt-level = 3
-lto = true
-strip = true
-panic = "abort"
-
-# ─── Linux .deb package ───
-[package.metadata.deb]
-maintainer = "choiceoh"
-copyright = "2024 choiceoh"
-license-file = ["LICENSE", "0"]
-extended-description = """Aurora is a native desktop AI coding assistant.
-It connects to Zhipu AI GLM-5 Turbo API and provides tools for
-file management, code search, bash execution, and more."""
-section = "devel"
-priority = "optional"
-assets = [
-    ["target/release/aurora", "usr/bin/", "755"],
-    ["assets/aurora.desktop", "usr/share/applications/", "644"],
-    ["assets/aurora.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+[workspace]
+resolver = "3"
+members = [
+    "crates/aurora-common",
+    "crates/aurora-server",
+    "crates/aurora-client",
 ]
-
-# ─── macOS/Windows bundle ───
-[package.metadata.bundle]
-name = "Aurora"
-identifier = "com.choiceoh.aurora"
-icon = ["assets/aurora.png"]
-short_description = "AI Coding Assistant"
-long_description = """Aurora is a native desktop AI coding assistant powered by GLM-5 Turbo.
-Features: file read/write/edit, bash execution, code search (grep/glob), real-time streaming."""
-category = "Developer Tool"

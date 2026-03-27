@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-/// Z.AI 코딩플랜 전용 설정
+/// Z.AI default settings
 const CODING_PLAN_BASE_URL: &str = "https://api.z.ai/api/coding/paas/v4";
 const CODING_PLAN_MODEL: &str = "glm-5-turbo";
 
@@ -15,6 +15,10 @@ pub struct Config {
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deneb_url: Option<String>,
+    #[serde(default = "default_server_host")]
+    pub server_host: String,
+    #[serde(default = "default_server_port")]
+    pub server_port: u16,
 }
 
 fn default_base_url() -> String {
@@ -25,6 +29,14 @@ fn default_model() -> String {
     CODING_PLAN_MODEL.to_string()
 }
 
+fn default_server_host() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_server_port() -> u16 {
+    3710
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -32,12 +44,13 @@ impl Default for Config {
             base_url: default_base_url(),
             model: default_model(),
             deneb_url: None,
+            server_host: default_server_host(),
+            server_port: default_server_port(),
         }
     }
 }
 
 impl Config {
-    /// 설정 파일 경로: ~/.aurora/config.json
     pub fn path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -45,13 +58,11 @@ impl Config {
             .join("config.json")
     }
 
-    /// 설정 파일에서 로드. 없으면 None.
     pub fn load() -> Option<Self> {
         let path = Self::path();
         let data = fs::read_to_string(&path).ok()?;
         let mut config: Config = serde_json::from_str(&data).ok()?;
 
-        // 환경변수 오버라이드 지원
         if let Ok(key) = std::env::var("ZHIPUAI_API_KEY") {
             if !key.is_empty() {
                 config.api_key = key;
@@ -70,25 +81,25 @@ impl Config {
         Some(config)
     }
 
-    /// 설정 파일에 저장.
     pub fn save(&self) -> Result<(), String> {
         let path = Self::path();
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).map_err(|e| format!("디렉토리 생성 실패: {e}"))?;
         }
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| format!("직렬화 실패: {e}"))?;
+        let json =
+            serde_json::to_string_pretty(self).map_err(|e| format!("직렬화 실패: {e}"))?;
         fs::write(&path, json).map_err(|e| format!("파일 쓰기 실패: {e}"))?;
         Ok(())
     }
 
-    /// API 키만 설정하고 저장 (첫 실행 시).
     pub fn init_with_key(api_key: String) -> Result<Self, String> {
         let config = Self {
             api_key,
             base_url: default_base_url(),
             model: default_model(),
             deneb_url: None,
+            server_host: default_server_host(),
+            server_port: default_server_port(),
         };
         config.save()?;
         Ok(config)
@@ -104,5 +115,9 @@ impl Config {
         } else {
             &self.base_url
         }
+    }
+
+    pub fn listen_addr(&self) -> String {
+        format!("{}:{}", self.server_host, self.server_port)
     }
 }
