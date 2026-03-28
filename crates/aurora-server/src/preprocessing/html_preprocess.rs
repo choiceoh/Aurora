@@ -162,17 +162,16 @@ fn extract_metadata(document: &Html, raw_html: &str) -> HtmlMetadata {
     let mut meta = HtmlMetadata::default();
 
     // Title
-    if let Some(sel) = Selector::parse("title").ok() {
-        if let Some(el) = document.select(&sel).next() {
+    if let Ok(sel) = Selector::parse("title")
+        && let Some(el) = document.select(&sel).next() {
             let text = el.text().collect::<String>().trim().to_string();
             if !text.is_empty() {
                 meta.title = Some(text);
             }
         }
-    }
 
     // Meta tags
-    if let Some(sel) = Selector::parse("meta").ok() {
+    if let Ok(sel) = Selector::parse("meta") {
         for el in document.select(&sel) {
             let name = el.attr("name").or_else(|| el.attr("property")).unwrap_or("");
             let content = el.attr("content").unwrap_or("");
@@ -185,15 +184,12 @@ fn extract_metadata(document: &Html, raw_html: &str) -> HtmlMetadata {
 
             if content.is_empty() {
                 // Check http-equiv for charset
-                if let Some(http_equiv) = el.attr("http-equiv") {
-                    if http_equiv.eq_ignore_ascii_case("content-type") {
-                        if let Some(ct) = el.attr("content") {
-                            if let Some(pos) = ct.to_lowercase().find("charset=") {
+                if let Some(http_equiv) = el.attr("http-equiv")
+                    && http_equiv.eq_ignore_ascii_case("content-type")
+                        && let Some(ct) = el.attr("content")
+                            && let Some(pos) = ct.to_lowercase().find("charset=") {
                                 meta.charset = Some(ct[pos + 8..].trim().to_string());
                             }
-                        }
-                    }
-                }
                 continue;
             }
 
@@ -214,25 +210,21 @@ fn extract_metadata(document: &Html, raw_html: &str) -> HtmlMetadata {
     }
 
     // Canonical URL
-    if let Some(sel) = Selector::parse("link[rel=\"canonical\"]").ok() {
-        if let Some(el) = document.select(&sel).next() {
-            if let Some(href) = el.attr("href") {
+    if let Ok(sel) = Selector::parse("link[rel=\"canonical\"]")
+        && let Some(el) = document.select(&sel).next()
+            && let Some(href) = el.attr("href") {
                 meta.canonical_url = Some(href.to_string());
             }
-        }
-    }
 
     // Language from <html lang="...">
-    if let Some(sel) = Selector::parse("html").ok() {
-        if let Some(el) = document.select(&sel).next() {
-            if let Some(lang) = el.attr("lang") {
+    if let Ok(sel) = Selector::parse("html")
+        && let Some(el) = document.select(&sel).next()
+            && let Some(lang) = el.attr("lang") {
                 meta.language = Some(lang.to_string());
             }
-        }
-    }
 
     // JSON-LD structured data
-    if let Some(sel) = Selector::parse("script[type=\"application/ld+json\"]").ok() {
+    if let Ok(sel) = Selector::parse("script[type=\"application/ld+json\"]") {
         for el in document.select(&sel) {
             let text = el.text().collect::<String>();
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(text.trim()) {
@@ -285,8 +277,8 @@ fn detect_quality_signals(document: &Html, raw_html: &str) -> QualitySignals {
     // SPA shell detection: check for empty body with JS framework markers
     if RE_SPA_SHELL.is_match(check_text) {
         // Confirm by checking if body has very little text content
-        if let Some(sel) = Selector::parse("body").ok() {
-            if let Some(body) = document.select(&sel).next() {
+        if let Ok(sel) = Selector::parse("body")
+            && let Some(body) = document.select(&sel).next() {
                 let body_text: String = body.text().collect();
                 let text_len = body_text.trim().len();
                 if text_len < 200 {
@@ -294,22 +286,20 @@ fn detect_quality_signals(document: &Html, raw_html: &str) -> QualitySignals {
                     signals.issues.push("SPA shell detected (minimal content)".to_string());
                 }
             }
-        }
     }
 
     // Content ratio estimation
     let total_len = raw_html.len();
-    if let Some(sel) = Selector::parse("body").ok() {
-        if let Some(body) = document.select(&sel).next() {
-            let text: String = body.text().collect();
-            let text_len = text.trim().len();
-            signals.content_ratio = if total_len > 0 {
-                (text_len as f32 / total_len as f32).min(1.0)
-            } else {
-                0.0
-            };
-            signals.has_content = text_len > 100;
-        }
+    if let Ok(sel) = Selector::parse("body")
+        && let Some(body) = document.select(&sel).next() {
+        let text: String = body.text().collect();
+        let text_len = text.trim().len();
+        signals.content_ratio = if total_len > 0 {
+            (text_len as f32 / total_len as f32).min(1.0)
+        } else {
+            0.0
+        };
+        signals.has_content = text_len > 100;
     }
 
     signals
@@ -559,48 +549,6 @@ fn extract_text_excluding(
     }
 
     output
-}
-
-/// Format the preprocessing result as a concise summary string.
-pub fn format_result(result: &PreprocessResult) -> String {
-    let mut out = String::new();
-
-    // Metadata header
-    if let Some(ref title) = result.metadata.title {
-        out.push_str(&format!("Title: {title}\n"));
-    }
-    if let Some(ref desc) = result.metadata.description.as_ref().or(result.metadata.og_description.as_ref()) {
-        out.push_str(&format!("Description: {desc}\n"));
-    }
-    if let Some(ref author) = result.metadata.author {
-        out.push_str(&format!("Author: {author}\n"));
-    }
-    if let Some(ref date) = result.metadata.published_date {
-        out.push_str(&format!("Published: {date}\n"));
-    }
-    if let Some(ref url) = result.metadata.canonical_url.as_ref().or(result.metadata.og_url.as_ref()) {
-        out.push_str(&format!("URL: {url}\n"));
-    }
-
-    // Quality warnings
-    if !result.signals.issues.is_empty() {
-        out.push_str(&format!("\nWarnings: {}\n", result.signals.issues.join(", ")));
-    }
-
-    // Stats
-    out.push_str(&format!(
-        "\n[Preprocessed: {} → {} bytes, {} noise elements removed, {:.0}% content ratio]\n",
-        result.stats.original_len,
-        result.stats.cleaned_len,
-        result.stats.elements_removed,
-        result.signals.content_ratio * 100.0,
-    ));
-
-    // Content separator
-    out.push_str("\n---\n\n");
-    out.push_str(&result.cleaned);
-
-    out
 }
 
 #[cfg(test)]

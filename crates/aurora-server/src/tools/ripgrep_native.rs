@@ -7,7 +7,6 @@
 //! - Memory-mapped file I/O where available
 //! - SIMD-accelerated matching via the regex engine
 
-use grep_matcher::Matcher;
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::sinks::UTF8;
 use grep_searcher::{BinaryDetection, SearcherBuilder};
@@ -177,10 +176,9 @@ fn walk_and_search(
             if is_binary(&name) {
                 continue;
             }
-            if let Some(pattern) = include {
-                if !glob_match_name(pattern, &name) {
+            if let Some(pattern) = include
+                && !glob_match_name(pattern, &name) {
                     continue;
-                }
             }
             search_file(&path.to_string_lossy(), base, matcher, searcher_builder, results);
         }
