@@ -2,6 +2,7 @@ use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
+use tokio_util::sync::CancellationToken;
 
 use aurora_common::{ClientMessage, ServerMessage};
 
@@ -47,6 +48,8 @@ pub async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
 
     // Build agent from current config
     let agent: Arc<Mutex<Option<Agent>>> = Arc::new(Mutex::new(None));
+    let cancel_token: Arc<Mutex<CancellationToken>> =
+        Arc::new(Mutex::new(CancellationToken::new()));
 
     {
         let config_guard = state.config.lock().await;
@@ -95,6 +98,9 @@ pub async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
             ClientMessage::SendMessage { text } => {
                 let agent = agent.clone();
                 let tx = tx.clone();
+                // Create a fresh cancellation token for this request
+                let token = CancellationToken::new();
+                *cancel_token.lock().await = token.clone();
                 // Run agent in a spawned task so we can keep reading WS
                 tokio::spawn(async move {
                     let mut guard = agent.lock().await;
@@ -107,7 +113,7 @@ pub async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
 
                     let tx2 = tx.clone();
                     let result = agent
-                        .run(text, |evt| {
+                        .run(text, token, |evt| {
                             let msg = agent_event_to_server_message(evt);
                             let _ = tx2.send(msg);
                         })
@@ -117,6 +123,10 @@ pub async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                         let _ = tx.send(ServerMessage::Error { message: e });
                     }
                 });
+            }
+            ClientMessage::StopGeneration => {
+                cancel_token.lock().await.cancel();
+                let _ = tx.send(ServerMessage::Done);
             }
             ClientMessage::ClearChat => {
                 let mut guard = agent.lock().await;

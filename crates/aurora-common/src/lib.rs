@@ -12,6 +12,8 @@ pub enum ClientMessage {
     SaveSession,
     /// Set the API key (first-time setup)
     SetApiKey { key: String },
+    /// Stop the current generation
+    StopGeneration,
     /// Keepalive ping
     Ping,
 }

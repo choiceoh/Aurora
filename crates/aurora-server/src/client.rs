@@ -3,6 +3,7 @@ use crate::types::*;
 use futures_util::StreamExt;
 use reqwest::Client;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 const MAX_RETRIES: usize = 3;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -35,6 +36,7 @@ impl ApiClient {
     pub async fn chat_stream(
         &self,
         req: &ChatRequest,
+        cancel: &CancellationToken,
         mut on_event: impl FnMut(StreamEvent),
     ) -> Result<Message, String> {
         let url = format!("{}/chat/completions", self.base_url);
@@ -89,7 +91,10 @@ impl ApiClient {
         let mut content = String::new();
         let mut tool_calls: Vec<ToolCallBuilder> = Vec::new();
 
-        while let Some(chunk) = stream.next().await {
+        while let Some(chunk) = tokio::select! {
+            chunk = stream.next() => chunk,
+            _ = cancel.cancelled() => None,
+        } {
             let chunk = chunk.map_err(|e| format!("Stream error: {e}"))?;
             buf.push_str(&String::from_utf8_lossy(&chunk));
 
