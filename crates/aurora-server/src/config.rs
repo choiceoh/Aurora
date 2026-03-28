@@ -63,17 +63,15 @@ impl Config {
         let data = fs::read_to_string(&path).ok()?;
         let mut config: Config = serde_json::from_str(&data).ok()?;
 
-        if let Ok(key) = std::env::var("ZHIPUAI_API_KEY") {
-            if !key.is_empty() {
+        if let Ok(key) = std::env::var("ZHIPUAI_API_KEY")
+            && !key.is_empty() {
                 config.api_key = key;
             }
-        }
 
-        if let Ok(url) = std::env::var("DENEB_URL") {
-            if !url.is_empty() {
+        if let Ok(url) = std::env::var("DENEB_URL")
+            && !url.is_empty() {
                 config.deneb_url = Some(url);
             }
-        }
 
         if config.api_key.is_empty() {
             return None;

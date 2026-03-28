@@ -62,6 +62,7 @@ pub struct ChatResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub struct Choice {
     pub message: Option<Message>,
     pub delta: Option<Message>,
@@ -73,16 +74,6 @@ pub struct Usage {
     pub prompt_tokens: Option<i32>,
     pub completion_tokens: Option<i32>,
     pub total_tokens: Option<i32>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ErrorResponse {
-    pub error: ApiError,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ApiError {
-    pub message: String,
 }
 
 // Events sent from agent to UI

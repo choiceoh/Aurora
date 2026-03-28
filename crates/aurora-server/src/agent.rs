@@ -66,25 +66,10 @@ impl Agent {
         self.total_completion_tokens = 0;
     }
 
-    pub fn message_count(&self) -> usize {
-        self.messages.len().saturating_sub(1)
-    }
-
     /// Exports conversation (excluding system prompt) as JSON.
     pub fn export_history(&self) -> Result<String, String> {
         let history: Vec<&Message> = self.messages.iter().skip(1).collect();
         serde_json::to_string_pretty(&history).map_err(|e| format!("Serialize error: {e}"))
-    }
-
-    /// Imports conversation from JSON, restoring system prompt.
-    pub fn import_history(&mut self, json: &str) -> Result<usize, String> {
-        let history: Vec<Message> =
-            serde_json::from_str(json).map_err(|e| format!("Deserialize error: {e}"))?;
-        let count = history.len();
-        let system_prompt = build_system_prompt(self.deneb_connected);
-        self.messages = vec![make_sys_msg(&system_prompt)];
-        self.messages.extend(history);
-        Ok(count)
     }
 
     pub async fn run(

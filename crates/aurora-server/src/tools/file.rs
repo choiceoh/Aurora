@@ -74,14 +74,13 @@ fn resolve_path(path: &str) -> Result<PathBuf, String> {
 }
 
 fn check_file_size(path: &Path) -> Result<(), String> {
-    if let Ok(meta) = fs::metadata(path) {
-        if meta.len() > MAX_READ_SIZE {
-            return Err(format!(
-                "File too large ({:.1}MB > {:.0}MB limit). Use offset/limit to read portions.",
-                meta.len() as f64 / 1_048_576.0,
-                MAX_READ_SIZE as f64 / 1_048_576.0
-            ));
-        }
+    if let Ok(meta) = fs::metadata(path)
+        && meta.len() > MAX_READ_SIZE {
+        return Err(format!(
+            "File too large ({:.1}MB > {:.0}MB limit). Use offset/limit to read portions.",
+            meta.len() as f64 / 1_048_576.0,
+            MAX_READ_SIZE as f64 / 1_048_576.0
+        ));
     }
     Ok(())
 }

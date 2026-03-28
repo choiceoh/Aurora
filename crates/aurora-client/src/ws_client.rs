@@ -40,10 +40,9 @@ pub async fn connect(url: &str) -> Result<WsHandle, String> {
         while let Some(Ok(msg)) = ws_rx.next().await {
             match msg {
                 Message::Text(text) => {
-                    if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
-                        if server_tx.send(server_msg).is_err() {
+                    if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text)
+                        && server_tx.send(server_msg).is_err() {
                             break;
-                        }
                     }
                 }
                 Message::Close(_) => break,

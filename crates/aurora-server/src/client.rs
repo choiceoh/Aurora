@@ -117,31 +117,29 @@ impl ApiClient {
                     Err(_) => continue,
                 };
 
-                if let Some(choice) = parsed.choices.first() {
-                    if let Some(delta) = &choice.delta {
-                        if let Some(text) = &delta.content {
-                            if !text.is_empty() {
-                                content.push_str(text);
-                                on_event(StreamEvent::Text(text.clone()));
-                            }
+                if let Some(choice) = parsed.choices.first()
+                    && let Some(delta) = &choice.delta {
+                    if let Some(text) = &delta.content
+                        && !text.is_empty() {
+                            content.push_str(text);
+                            on_event(StreamEvent::Text(text.clone()));
                         }
 
-                        if let Some(tcs) = &delta.tool_calls {
-                            for tc in tcs {
-                                let idx = tc.index.unwrap_or(0) as usize;
-                                while tool_calls.len() <= idx {
-                                    tool_calls.push(ToolCallBuilder::default());
-                                }
-                                let builder = &mut tool_calls[idx];
-                                if !tc.id.is_empty() {
-                                    builder.id.clone_from(&tc.id);
-                                }
-                                if !tc.function.name.is_empty() {
-                                    builder.name.clone_from(&tc.function.name);
-                                }
-                                if !tc.function.arguments.is_empty() {
-                                    builder.arguments.push_str(&tc.function.arguments);
-                                }
+                    if let Some(tcs) = &delta.tool_calls {
+                        for tc in tcs {
+                            let idx = tc.index.unwrap_or(0) as usize;
+                            while tool_calls.len() <= idx {
+                                tool_calls.push(ToolCallBuilder::default());
+                            }
+                            let builder = &mut tool_calls[idx];
+                            if !tc.id.is_empty() {
+                                builder.id.clone_from(&tc.id);
+                            }
+                            if !tc.function.name.is_empty() {
+                                builder.name.clone_from(&tc.function.name);
+                            }
+                            if !tc.function.arguments.is_empty() {
+                                builder.arguments.push_str(&tc.function.arguments);
                             }
                         }
                     }
