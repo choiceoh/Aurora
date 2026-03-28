@@ -4,6 +4,7 @@ use aurora_common::{ClientMessage, ServerMessage};
 use slint::{Model, ModelRc, SharedString, VecModel};
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
+use tokio::time::Duration;
 
 slint::include_modules!();
 
@@ -15,15 +16,20 @@ async fn main() {
     let ws_tx: Arc<Mutex<Option<mpsc::UnboundedSender<ClientMessage>>>> =
         Arc::new(Mutex::new(None));
 
+    // Saved server URL for reconnection
+    let server_url: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
     // Load saved server URL
     let saved_url = load_client_config();
     if let Some(ref url) = saved_url {
+        *server_url.blocking_lock() = Some(url.clone());
         app.set_status_text(SharedString::from(&format!("저장된 서버: {url}")));
     }
 
     // ─── Connect to server ───
     let app_weak = app.as_weak();
     let ws_tx_clone = ws_tx.clone();
+    let server_url_clone = server_url.clone();
     app.on_connect_server(move |url| {
         let url = url.to_string().trim().to_string();
         if url.is_empty() {
@@ -32,6 +38,7 @@ async fn main() {
 
         let app_weak = app_weak.clone();
         let ws_tx = ws_tx_clone.clone();
+        let server_url = server_url_clone.clone();
 
         // Save URL for next time
         let _ = save_client_config(&url);
@@ -41,6 +48,7 @@ async fn main() {
         }
 
         tokio::spawn(async move {
+            *server_url.lock().await = Some(url.clone());
             match ws_client::connect(&url).await {
                 Ok(handle) => {
                     *ws_tx.lock().await = Some(handle.tx);
@@ -73,7 +81,7 @@ async fn main() {
     let app_weak = app.as_weak();
     let ws_tx_clone = ws_tx.clone();
     app.on_send_message(move |text| {
-        let text = text.to_string();
+        let text = text.to_string().trim().to_string();
         if text.is_empty() {
             return;
         }
@@ -83,6 +91,7 @@ async fn main() {
             app.set_is_streaming(true);
             app.set_status_text(SharedString::from("생성 중..."));
             app.set_streaming_text(SharedString::default());
+            app.set_current_segments(ModelRc::new(VecModel::from(Vec::<MessageSegment>::new())));
         }
 
         let ws_tx = ws_tx_clone.clone();
@@ -90,6 +99,25 @@ async fn main() {
             if let Some(tx) = ws_tx.lock().await.as_ref() {
                 let _ = tx.send(ClientMessage::SendMessage { text });
             }
+        });
+    });
+
+    // ─── Stop generation ───
+    let ws_tx_clone = ws_tx.clone();
+    let app_weak = app.as_weak();
+    app.on_stop_generation(move || {
+        let ws_tx = ws_tx_clone.clone();
+        let app_weak = app_weak.clone();
+        tokio::spawn(async move {
+            if let Some(tx) = ws_tx.lock().await.as_ref() {
+                let _ = tx.send(ClientMessage::StopGeneration);
+            }
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(app) = app_weak.upgrade() {
+                    app.set_is_streaming(false);
+                    app.set_status_text(SharedString::from("중지됨"));
+                }
+            });
         });
     });
 
@@ -107,7 +135,11 @@ async fn main() {
                 if let Some(app) = app_weak.upgrade() {
                     app.set_messages(ModelRc::new(VecModel::from(Vec::<ChatMessage>::new())));
                     app.set_streaming_text(SharedString::default());
+                    app.set_current_segments(ModelRc::new(VecModel::from(
+                        Vec::<MessageSegment>::new(),
+                    )));
                     app.set_usage_text(SharedString::default());
+                    app.set_msg_count(0);
                     app.set_status_text(SharedString::from("대화 초기화됨"));
                 }
             });
@@ -140,6 +172,78 @@ async fn main() {
         });
     });
 
+    // ─── Reconnect ───
+    let app_weak = app.as_weak();
+    let ws_tx_clone = ws_tx.clone();
+    let server_url_clone = server_url.clone();
+    app.on_reconnect(move || {
+        let app_weak = app_weak.clone();
+        let ws_tx = ws_tx_clone.clone();
+        let server_url = server_url_clone.clone();
+
+        tokio::spawn(async move {
+            let url = {
+                let guard = server_url.lock().await;
+                guard.clone()
+            };
+
+            let Some(url) = url else {
+                let aw = app_weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(app) = aw.upgrade() {
+                        app.set_needs_server_url(true);
+                    }
+                });
+                return;
+            };
+
+            // Try reconnection with exponential backoff (3 attempts)
+            for attempt in 0..3 {
+                if attempt > 0 {
+                    tokio::time::sleep(Duration::from_millis(1000 * 2u64.pow(attempt))).await;
+                }
+
+                let aw = app_weak.clone();
+                let attempt_num = attempt + 1;
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(app) = aw.upgrade() {
+                        app.set_status_text(SharedString::from(&format!(
+                            "재연결 시도 중... ({attempt_num}/3)"
+                        )));
+                    }
+                });
+
+                match ws_client::connect(&url).await {
+                    Ok(handle) => {
+                        *ws_tx.lock().await = Some(handle.tx);
+                        let aw = app_weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(app) = aw.upgrade() {
+                                app.set_connection_status(SharedString::from("connected"));
+                                app.set_status_text(SharedString::from("서버 재연결됨"));
+                            }
+                        });
+                        spawn_receiver(app_weak, handle.rx);
+                        return;
+                    }
+                    Err(_) => continue,
+                }
+            }
+
+            let aw = app_weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(app) = aw.upgrade() {
+                    app.set_status_text(SharedString::from("재연결 실패"));
+                }
+            });
+        });
+    });
+
+    // ─── Scroll to bottom (no-op placeholder, ScrollView auto-manages) ───
+    app.on_request_scroll_to_bottom(|| {
+        // Slint ScrollView manages viewport; this callback exists for future use
+    });
+
     // If we have a saved URL, auto-connect
     if let Some(url) = saved_url {
         let app_weak = app.as_weak();
@@ -159,7 +263,6 @@ async fn main() {
                     spawn_receiver(app_weak, handle.rx);
                 }
                 Err(_) => {
-                    // Auto-connect failed, show manual input
                     let aw = app_weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(app) = aw.upgrade() {
@@ -192,9 +295,11 @@ fn spawn_receiver(
                 ServerMessage::Text { content } => {
                     buf.lock().await.push_str(&content);
                     let text = buf.lock().await.clone();
+                    let segments = parse_message_segments(&text);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(app) = app_weak.upgrade() {
                             app.set_streaming_text(SharedString::from(&text));
+                            app.set_current_segments(ModelRc::new(VecModel::from(segments)));
                         }
                     });
                 }
@@ -212,8 +317,17 @@ fn spawn_receiver(
                             if !pending.is_empty() {
                                 push_message(&app, "assistant", &pending, false, "");
                                 app.set_streaming_text(SharedString::default());
+                                app.set_current_segments(ModelRc::new(VecModel::from(
+                                    Vec::<MessageSegment>::new(),
+                                )));
                             }
-                            push_message(&app, "tool", &format!("⏳ {summary}"), true, &name);
+                            push_message(
+                                &app,
+                                "tool",
+                                &format!("{summary}"),
+                                true,
+                                &format!("{name}"),
+                            );
                         }
                     });
                 }
@@ -221,7 +335,7 @@ fn spawn_receiver(
                     let short = safe_truncate(&result, 800);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(app) = app_weak.upgrade() {
-                            push_message(&app, "tool", &short, true, &format!("{name} ✅"));
+                            push_message(&app, "tool", &short, true, &format!("{name} ✓"));
                         }
                     });
                 }
@@ -233,7 +347,7 @@ fn spawn_receiver(
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(app) = app_weak.upgrade() {
                             app.set_usage_text(SharedString::from(&format!(
-                                "📥 {prompt}  📤 {completion}  합계: {total} tokens"
+                                "입력 {prompt}  출력 {completion}  합계 {total}"
                             )));
                         }
                     });
@@ -251,6 +365,9 @@ fn spawn_receiver(
                                 push_message(&app, "assistant", &final_text, false, "");
                             }
                             app.set_streaming_text(SharedString::default());
+                            app.set_current_segments(ModelRc::new(VecModel::from(
+                                Vec::<MessageSegment>::new(),
+                            )));
                             app.set_is_streaming(false);
                             app.set_status_text(SharedString::from("준비됨"));
                         }
@@ -262,11 +379,14 @@ fn spawn_receiver(
                             push_message(
                                 &app,
                                 "assistant",
-                                &format!("⚠️ 오류: {message}"),
+                                &format!("오류: {message}"),
                                 false,
                                 "",
                             );
                             app.set_streaming_text(SharedString::default());
+                            app.set_current_segments(ModelRc::new(VecModel::from(
+                                Vec::<MessageSegment>::new(),
+                            )));
                             app.set_is_streaming(false);
                             app.set_status_text(SharedString::from("오류 발생"));
                         }
@@ -288,7 +408,11 @@ fn spawn_receiver(
                                 Vec::<ChatMessage>::new(),
                             )));
                             app.set_streaming_text(SharedString::default());
+                            app.set_current_segments(ModelRc::new(VecModel::from(
+                                Vec::<MessageSegment>::new(),
+                            )));
                             app.set_usage_text(SharedString::default());
+                            app.set_msg_count(0);
                             app.set_status_text(SharedString::from("대화 초기화됨"));
                         }
                     });
@@ -331,6 +455,75 @@ fn spawn_receiver(
     });
 }
 
+// ─── Message Segment Parsing ───
+
+/// Parse message content into text and code segments.
+/// Splits on ``` boundaries for distinct rendering.
+fn parse_message_segments(content: &str) -> Vec<MessageSegment> {
+    let mut segments = Vec::new();
+    let mut remaining = content;
+
+    while let Some(start) = remaining.find("```") {
+        // Text before code block
+        let before = &remaining[..start];
+        if !before.is_empty() {
+            segments.push(MessageSegment {
+                text: SharedString::from(before.trim_end()),
+                is_code: false,
+                language: SharedString::default(),
+            });
+        }
+
+        let after_fence = &remaining[start + 3..];
+
+        // Extract language from opening fence
+        let (language, code_start) = if let Some(nl) = after_fence.find('\n') {
+            let lang = after_fence[..nl].trim().to_string();
+            (lang, nl + 1)
+        } else {
+            // Incomplete fence — just show as text
+            segments.push(MessageSegment {
+                text: SharedString::from(remaining),
+                is_code: false,
+                language: SharedString::default(),
+            });
+            return segments;
+        };
+
+        let code_content = &after_fence[code_start..];
+
+        // Find closing fence
+        if let Some(end) = code_content.find("```") {
+            let code = &code_content[..end];
+            segments.push(MessageSegment {
+                text: SharedString::from(code.trim_end()),
+                is_code: true,
+                language: SharedString::from(&language),
+            });
+            remaining = &code_content[end + 3..];
+        } else {
+            // Unclosed code block (still streaming) — show as code
+            segments.push(MessageSegment {
+                text: SharedString::from(code_content.trim_end()),
+                is_code: true,
+                language: SharedString::from(&language),
+            });
+            return segments;
+        }
+    }
+
+    // Remaining text after last code block
+    if !remaining.is_empty() {
+        segments.push(MessageSegment {
+            text: SharedString::from(remaining.trim_start_matches('\n')),
+            is_code: false,
+            language: SharedString::default(),
+        });
+    }
+
+    segments
+}
+
 // ─── Helpers ───
 
 fn push_message(app: &App, role: &str, content: &str, is_tool: bool, tool_name: &str) {
@@ -341,6 +534,7 @@ fn push_message(app: &App, role: &str, content: &str, is_tool: bool, tool_name: 
         content: SharedString::from(content),
         is_tool,
         tool_name: SharedString::from(tool_name),
+        is_expanded: false,
     });
     let count = vec_model.row_count() as i32;
     app.set_messages(ModelRc::from(vec_model));
@@ -361,10 +555,10 @@ fn safe_truncate(s: &str, max_chars: usize) -> String {
     let lines: Vec<&str> = s.lines().collect();
     if lines.len() > 8 {
         let preview: String = lines[..6].join("\n");
-        return format!("{preview}\n… ({} more lines)", lines.len() - 6);
+        return format!("{preview}\n... ({} more lines)", lines.len() - 6);
     }
     let truncated: String = s.chars().take(max_chars).collect();
-    format!("{truncated}…")
+    format!("{truncated}...")
 }
 
 // ─── Client Config ───

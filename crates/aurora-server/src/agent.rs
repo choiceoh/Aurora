@@ -1,6 +1,7 @@
 use crate::client::{ApiClient, StreamEvent};
 use crate::tools::Registry;
 use crate::types::*;
+use tokio_util::sync::CancellationToken;
 
 const MAX_ITERATIONS: usize = 25;
 const MAX_CONTEXT_MESSAGES: usize = 100;
@@ -91,6 +92,7 @@ impl Agent {
     pub async fn run(
         &mut self,
         user_message: String,
+        cancel: CancellationToken,
         mut on_event: impl FnMut(AgentEvent),
     ) -> Result<(), String> {
         self.messages.push(Message {
@@ -104,6 +106,11 @@ impl Agent {
         self.trim_context();
 
         for _ in 0..MAX_ITERATIONS {
+            if cancel.is_cancelled() {
+                on_event(AgentEvent::Done);
+                return Ok(());
+            }
+
             let req = ChatRequest {
                 model: String::new(),
                 messages: self.messages.clone(),
@@ -115,7 +122,7 @@ impl Agent {
 
             let assistant_msg = self
                 .client
-                .chat_stream(&req, |evt| match evt {
+                .chat_stream(&req, &cancel, |evt| match evt {
                     StreamEvent::Text(t) => on_event(AgentEvent::Text(t)),
                     StreamEvent::Usage {
                         prompt,
@@ -144,6 +151,11 @@ impl Agent {
             };
 
             for tc in &tool_calls {
+                if cancel.is_cancelled() {
+                    on_event(AgentEvent::Done);
+                    return Ok(());
+                }
+
                 on_event(AgentEvent::ToolStart {
                     name: tc.function.name.clone(),
                     args: tc.function.arguments.clone(),
