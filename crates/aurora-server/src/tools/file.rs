@@ -5,7 +5,39 @@ use std::path::{Path, PathBuf};
 
 const MAX_READ_SIZE: u64 = 10 * 1024 * 1024; // 10MB
 
+const MAX_DIR_ENTRIES: usize = 1000;
+const DEFAULT_MAX_DEPTH: usize = 3;
+
+const SKIP_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "vendor",
+    "__pycache__",
+    ".hg",
+    ".svn",
+    "dist",
+    "build",
+    ".next",
+    ".nuxt",
+];
+
 pub fn register(reg: &mut Registry) {
+    reg.register_tool(
+        "list_dir",
+        "List directory contents with file types and sizes. Useful for understanding project structure.",
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Directory path to list (default: current dir)" },
+                "recursive": { "type": "boolean", "description": "List recursively (default: false)" },
+                "max_depth": { "type": "integer", "description": "Max recursion depth (default: 3, only with recursive)" }
+            },
+            "required": []
+        }),
+        Box::new(list_dir),
+    );
+
     reg.register_tool(
         "read_file",
         "Read the contents of a file. Returns file content with line numbers.",
@@ -172,4 +204,114 @@ fn edit_file(args: Value) -> Result<String, String> {
     Ok(format!(
         "Edited {path}: replaced {old_lines} line(s) with {new_lines} line(s)"
     ))
+}
+
+fn list_dir(args: Value) -> Result<String, String> {
+    let path = args["path"].as_str().unwrap_or(".");
+    let recursive = args["recursive"].as_bool().unwrap_or(false);
+    let max_depth = args["max_depth"]
+        .as_i64()
+        .unwrap_or(DEFAULT_MAX_DEPTH as i64)
+        .max(1) as usize;
+
+    let resolved = resolve_path(path)?;
+    if !resolved.is_dir() {
+        return Err(format!("{path} is not a directory"));
+    }
+
+    let mut entries = Vec::new();
+    if recursive {
+        list_dir_recursive(&resolved, &resolved, 0, max_depth, &mut entries);
+    } else {
+        list_dir_flat(&resolved, &mut entries)?;
+    }
+
+    if entries.is_empty() {
+        return Ok("(empty directory)".to_string());
+    }
+
+    let mut result = entries.join("\n");
+    if entries.len() >= MAX_DIR_ENTRIES {
+        result.push_str(&format!("\n[Truncated at {MAX_DIR_ENTRIES} entries]"));
+    }
+    Ok(result)
+}
+
+fn list_dir_flat(dir: &Path, entries: &mut Vec<String>) -> Result<(), String> {
+    let mut items: Vec<_> = fs::read_dir(dir)
+        .map_err(|e| format!("Cannot read directory: {e}"))?
+        .filter_map(|e| e.ok())
+        .collect();
+    items.sort_by_key(|e| e.file_name());
+
+    for entry in items {
+        if entries.len() >= MAX_DIR_ENTRIES {
+            break;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let meta = entry.metadata();
+        if let Ok(meta) = meta {
+            if meta.is_dir() {
+                entries.push(format!("  {name}/"));
+            } else {
+                let size = format_size(meta.len());
+                entries.push(format!("  {name}  ({size})"));
+            }
+        } else {
+            entries.push(format!("  {name}"));
+        }
+    }
+    Ok(())
+}
+
+fn list_dir_recursive(
+    dir: &Path,
+    base: &Path,
+    depth: usize,
+    max_depth: usize,
+    entries: &mut Vec<String>,
+) {
+    if depth > max_depth || entries.len() >= MAX_DIR_ENTRIES {
+        return;
+    }
+
+    let mut items: Vec<_> = match fs::read_dir(dir) {
+        Ok(rd) => rd.filter_map(|e| e.ok()).collect(),
+        Err(_) => return,
+    };
+    items.sort_by_key(|e| e.file_name());
+
+    let indent = "  ".repeat(depth + 1);
+    for entry in items {
+        if entries.len() >= MAX_DIR_ENTRIES {
+            return;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let path = entry.path();
+
+        if path.is_dir() {
+            if SKIP_DIRS.contains(&name.as_str()) {
+                continue;
+            }
+            entries.push(format!("{indent}{name}/"));
+            list_dir_recursive(&path, base, depth + 1, max_depth, entries);
+        } else {
+            if let Ok(meta) = entry.metadata() {
+                let size = format_size(meta.len());
+                entries.push(format!("{indent}{name}  ({size})"));
+            } else {
+                entries.push(format!("{indent}{name}"));
+            }
+        }
+    }
+}
+
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    }
 }
